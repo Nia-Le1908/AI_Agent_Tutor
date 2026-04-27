@@ -1,0 +1,113 @@
+# ================================================================
+# AI Tutor V5.1 - Git ignore rules for security, size, and local artifacts
+# ================================================================
+
+# -------------------------
+# Python caches and bytecode
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# -------------------------
+# Virtual environments
+# -------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# -------------------------
+# Build, packaging, and tooling
+# -------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# -------------------------
+# IDE / OS noise
+# -------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Secrets and environment files
+# -------------------------
+.env
+.env.*
+!.env.example
+
+# -------------------------
+# Databases and local state
+# -------------------------
+*.sqlite
+*.sqlite3
+*.db
+
+# -------------------------
+# Vector store / heavy indexes
+# -------------------------
+faiss_index.bin
+vector_store/*.bin
+
+# -------------------------
+# Logs
+# -------------------------
+logs/
+*.log
+
+# -------------------------
+# Raw document inputs (data folders)
+# Keep folder structure with optional .gitkeep files only.
+# -------------------------
+
+data/*
+!data/.gitkeep
+
+data/**/*.pdf
+data/**/*.docx
+data/**/*.txt
+data/**/*.csv
+data/**/*.tsv
+data/**/*.xlsx
+data/**/*.pptx
+data/**/*.rtf
+data/**/*.md
+
+data/**/*.jpg
+data/**/*.jpeg
+data/**/*.png
+data/**/*.gif
+data/**/*.webp
+
+mock_data/*
+!mock_data/.gitkeep
+
+mock_data/**/*.pdf
+mock_data/**/*.docx
+mock_data/**/*.txt
+mock_data/**/*.csv
+mock_data/**/*.tsv
+mock_data/**/*.xlsx
+mock_data/**/*.pptx
+mock_data/**/*.rtf
+
+# Explicitly ignore generated mock artifacts that can contain large/sensitive data
+mock_data/*.sqlite
+mock_data/*.db
+mock_data/*.json
+
+# -------------------------
+# Streamlit local cache/state
+# -------------------------
+.streamlit/secrets.toml
+.streamlit/cache/

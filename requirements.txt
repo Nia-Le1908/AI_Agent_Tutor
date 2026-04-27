@@ -1,0 +1,35 @@
+# ================================================================
+# AI Tutor V5.1 - Requirements
+# ================================================================
+# Pinned to exact versions from the tested environment for
+# reproducibility. Run: pip install -r requirements.txt
+
+# ---------- Core configuration ----------
+python-dotenv==1.2.2
+jsonschema==4.26.0
+
+# ---------- AI / LLM ----------
+google-generativeai>=0.8.5,<1.0.0   # Gemini API (cloud)
+ollama==0.6.1                        # Ollama API (local)
+
+# ---------- RAG / Embeddings / Vector search ----------
+sentence-transformers==3.4.1
+faiss-cpu==1.13.2
+numpy==2.4.4
+scikit-learn==1.8.0
+torch==2.11.0
+
+# ---------- Document loaders (PDF/DOCX) ----------
+pypdf==4.3.1
+python-docx==1.2.0
+lxml==6.1.0
+
+# ---------- UI & Analytics ----------
+streamlit==1.56.0
+plotly==5.24.1
+matplotlib==3.10.9
+
+# ---------- Utilities ----------
+pydantic==2.13.3
+requests==2.33.1
+tenacity==9.1.4

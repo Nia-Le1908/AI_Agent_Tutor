@@ -1,0 +1,192 @@
+# ================================================================
+#  AI Tutor V5.1 — Hướng dẫn cài đặt trên máy mới
+# ================================================================
+#  Cập nhật: 2026-04-27
+#  Yêu cầu: Python 3.10+, Git, Ollama (nếu dùng AI local)
+# ================================================================
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 1: Clone/Copy dự án
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Copy toàn bộ thư mục AI_agent_gia_su vào máy mới
+# Hoặc nếu dùng Git:
+#   git clone <repo-url> AI_agent_gia_su
+#   cd AI_agent_gia_su
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 2: Tạo môi trường ảo Python
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Windows (PowerShell):
+python -m venv venv
+venv\Scripts\activate
+
+# Linux / macOS:
+#   python3 -m venv venv
+#   source venv/bin/activate
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 3: Cài đặt thư viện
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Lưu ý: torch khá nặng (~2GB). Nếu chỉ dùng CPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 4: Cấu hình file .env
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Tạo file .env ở thư mục gốc (KHÔNG commit file này lên Git!)
+# Copy nội dung bên dưới và thay bằng key thật của bạn:
+
+# --- Nội dung file .env ---
+# GEMINI_API_KEY=your_gemini_api_key_here
+# GEMINI_MODEL=gemini-1.5-flash
+#
+# DB_PATH=data/ai_tutor_v5.db
+# FAISS_INDEX_PATH=vector_store/faiss_index.bin
+# LOG_PATH=logs/app.log
+#
+# CHUNK_SIZE=256
+# CHUNK_OVERLAP=50
+# TOP_K=3
+#
+# EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+# DEBUG_RAG_CONTEXT=false
+# --- Hết ---
+
+# Lấy Gemini API Key tại: https://aistudio.google.com/apikey
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 5: Khởi tạo Database
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+python init_db.py
+
+# Nếu muốn có dữ liệu mẫu để test ngay:
+python generate_mock_data.py
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 6: Cài đặt Ollama (AI local — tuỳ chọn)
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Tải Ollama tại: https://ollama.com/download
+# Sau khi cài xong, tải model:
+ollama pull qwen2.5
+
+# Kiểm tra Ollama chạy chưa:
+ollama list
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 7: Nạp tài liệu cho RAG (tuỳ chọn)
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Đặt file PDF/DOCX vào thư mục data/raw_docs/
+# Sau đó chạy:
+python embedder.py
+
+# Lệnh này sẽ:
+#   - Đọc tất cả PDF/DOCX trong data/raw_docs/
+#   - Tách nội dung thành các chunk nhỏ
+#   - Tạo vector embeddings bằng model all-MiniLM-L6-v2
+#   - Lưu FAISS index vào vector_store/
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  BƯỚC 8: Chạy ứng dụng
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+streamlit run app.py
+
+# Trình duyệt sẽ tự mở tại: http://localhost:8501
+# Nếu không tự mở, mở trình duyệt và truy cập URL trên.
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  XỬ LÝ SỰ CỐ THƯỜNG GẶP
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ❌ Lỗi "No module named ..."
+#    → Kiểm tra đã activate venv chưa: venv\Scripts\activate
+#    → Chạy lại: pip install -r requirements.txt
+
+# ❌ Lỗi "GEMINI_API_KEY not set"
+#    → Kiểm tra file .env có đúng ở thư mục gốc không
+#    → Key phải bắt đầu bằng "AIza..."
+
+# ❌ Lỗi "Database is locked" hoặc "no such table"
+#    → Chạy lại: python init_db.py
+
+# ❌ Lỗi "Ollama connection refused"
+#    → Mở terminal riêng, chạy: ollama serve
+#    → Kiểm tra: ollama list
+
+# ❌ Lỗi FAISS / "faiss_index.bin not found"
+#    → Chưa nạp tài liệu. Chạy: python embedder.py
+#    → Đảm bảo có file PDF/DOCX trong data/raw_docs/
+
+# ❌ Streamlit mở nhưng trắng / lỗi import
+#    → Dùng đúng Python trong venv:
+#       venv\Scripts\python.exe -m streamlit run app.py
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  CẤU TRÚC THƯ MỤC
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# AI_agent_gia_su/
+# ├── app.py                 ← Entry point (Streamlit UI)
+# ├── config.py              ← Cấu hình tập trung
+# ├── controller.py          ← Logic chat + exercise
+# ├── generator.py           ← Tạo câu hỏi qua LLM
+# ├── adaptive_logic.py      ← Tự động chỉnh độ khó
+# ├── sqlite_manager.py      ← Truy vấn database
+# ├── embedder.py            ← Pipeline tạo vector
+# ├── retriever.py           ← Tìm kiếm tài liệu
+# ├── dashboard.py           ← Biểu đồ analytics
+# ├── json_parser.py         ← Validate JSON schema
+# ├── init_db.py             ← Khởi tạo database
+# ├── generate_mock_data.py  ← Tạo dữ liệu mẫu
+# ├── seed_db.py             ← Seed câu hỏi từ AI
+# ├── rag_tester.py          ← Test chất lượng RAG
+# ├── schema.json            ← JSON schema cho câu hỏi
+# ├── schema.sql             ← Schema database SQLite
+# ├── requirements.txt       ← Thư viện Python
+# ├── .env                   ← Biến môi trường (KHÔNG commit!)
+# ├── data/
+# │   ├── raw_docs/          ← PDF/DOCX tài liệu
+# │   └── ai_tutor_v5.db     ← SQLite database
+# └── vector_store/          ← FAISS index + metadata
+
+
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+##  TÓM TẮT LỆNH (COPY & PASTE)
+## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# --- Cài đặt nhanh (Windows) ---
+# python -m venv venv
+# venv\Scripts\activate
+# pip install --upgrade pip
+# pip install -r requirements.txt
+# python init_db.py
+# python generate_mock_data.py
+# streamlit run app.py
+
+# --- Cài đặt nhanh (Linux/macOS) ---
+# python3 -m venv venv
+# source venv/bin/activate
+# pip install --upgrade pip
+# pip install -r requirements.txt
+# python init_db.py
+# python generate_mock_data.py
+# streamlit run app.py
