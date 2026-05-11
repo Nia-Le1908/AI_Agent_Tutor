@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List
 
 from adaptive_logic import get_next_difficulty
-from config import TOP_K, require_gemini_api_key
+from config import TOP_K, DEEPSEEK_BASE_URL, require_deepseek_api_key, require_gemini_api_key
 from generator import DEFAULT_MODEL, generate
 from retriever import retrieve, retrieve_with_sources
 
@@ -101,21 +101,6 @@ def _build_quota_fallback_response(user_input: str, context_chunks: List[str]) -
     )
 
 
-def _resolve_provider(model_name: str) -> str:
-    """
-    Resolve LLM provider from env or model-name heuristic.
-
-    Priority:
-    1) LLM_PROVIDER env var if set (ollama/gemini)
-    2) model name prefix heuristic
-    """
-    env_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-    if env_provider in {"ollama", "gemini"}:
-        return env_provider
-
-    return "gemini" if model_name.strip().lower().startswith("gemini") else "ollama"
-
-
 def _generate_text_with_backoff(
     prompt: str,
     *,
@@ -126,47 +111,33 @@ def _generate_text_with_backoff(
     max_delay: float = 20.0,
 ) -> str:
     """
-    Send prompt to configured LLM provider with exponential backoff.
-
-    This is used by chatbot flow (separate from generator.py which focuses on
-    strict JSON question generation).
+    Gửi prompt đến DeepSeek API với exponential backoff.
     """
-    provider = _resolve_provider(model_name)
     last_error: Exception | None = None
 
     for attempt in range(max_attempts):
         try:
-            if provider == "ollama":
-                import ollama
-
-                response = ollama.chat(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                text = (response.get("message", {}).get("content", "") or "").strip()
-            else:
-                genai = importlib.import_module("google.generativeai")
-
-                api_key = require_gemini_api_key()
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
-                text = (response.text or "").strip()
-
+            from openai import OpenAI
+            client = OpenAI(api_key=require_deepseek_api_key(), base_url=DEEPSEEK_BASE_URL)
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+            )
+            text = (response.choices[0].message.content or "").strip()
             if not text:
-                raise ValueError(f"{provider} returned empty text")
+                raise ValueError("DeepSeek returned empty text")
             return text
         except Exception as exc:
             last_error = exc
             if attempt == max_attempts - 1:
                 break
-
             delay = min(initial_delay * (backoff_factor ** attempt), max_delay)
             jitter = random.uniform(0.0, 0.35 * delay)
             time.sleep(delay + jitter)
 
     raise RuntimeError(
-        f"{provider.upper()} chat request failed after {max_attempts} attempts: {last_error}"
+        f"DeepSeek chat request failed after {max_attempts} attempts: {last_error}"
     )
 
 

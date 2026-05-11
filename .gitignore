@@ -58,6 +58,7 @@ Thumbs.db
 # -------------------------
 faiss_index.bin
 vector_store/*.bin
+vector_store/chunks_metadata.json
 
 # -------------------------
 # Logs

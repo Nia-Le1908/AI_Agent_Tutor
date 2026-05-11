@@ -1,0 +1,172 @@
+# Kiến trúc hệ thống AI Tutor V5.1
+
+Tài liệu này mô tả kiến trúc (components + luồng dữ liệu) của AI Tutor trong repo hiện tại.
+
+> Ghi chú: Một số comment/tài liệu cũ có nhắc “Gemini/Ollama”. Trong code hiện tại, các lời gọi LLM chính đang dùng **DeepSeek API** thông qua **OpenAI SDK** (xem `controller.py`, `generator.py`, `config.py`). Repo vẫn giữ biến `GEMINI_API_KEY` như một tuỳ chọn/legacy.
+
+---
+
+## 1) Tổng quan thành phần
+
+### Tầng giao diện (Presentation)
+- `app.py`: Streamlit UI gồm 3 tab: **Chat**, **Exercise**, **Dashboard**.
+- `dashboard.py`: Vẽ biểu đồ học tập bằng Plotly.
+
+### Tầng điều phối (Orchestration)
+- `controller.py`: “đầu não” điều phối 2 luồng chính:
+  - Chat có RAG: retrieve context → build prompt → gọi LLM → trả lời + trích dẫn nguồn (nếu có).
+  - Tạo bài tập theo độ khó thích nghi: gọi `adaptive_logic.get_next_difficulty()` + `generator.generate()`.
+
+### Tầng RAG (Retrieval-Augmented Generation)
+- `embedder.py`: pipeline offline để tạo **FAISS index** + **metadata** từ tài liệu PDF/DOCX.
+- `retriever.py`: runtime retrieval top-k từ FAISS dựa trên embedding (SentenceTransformers).
+- `vector_store/`:
+  - `faiss_index.bin`: chỉ mục vector.
+  - `chunks_metadata.json`: metadata cho từng chunk (text, source_file, chunk_id...).
+
+### Tầng sinh câu hỏi (Question Generation)
+- `generator.py`: sinh câu hỏi trắc nghiệm JSON bằng LLM + harden parsing + validate theo `schema.json`.
+- `json_parser.py`: (tuỳ chọn) parse JSON string + validate schema + insert vào bảng `questions`.
+
+### Tầng học thích nghi (Adaptive Learning)
+- `adaptive_logic.py`: cập nhật level dựa trên lịch sử trả lời:
+  - 3 đúng liên tiếp → +1 level
+  - 2 sai liên tiếp → -1 level
+  - clamp về [1..5]
+
+### Tầng lưu trữ (Storage)
+- SQLite:
+  - `schema.sql`: định nghĩa bảng `users`, `questions`, `history`, `sessions`.
+  - `init_db.py`: tạo DB theo schema.
+  - `sqlite_manager.py`: DAO/queries: lấy câu hỏi, lưu history, thống kê.
+
+### Cấu hình & vận hành
+- `config.py`: đọc `.env`, thiết lập đường dẫn DB/FAISS/logs, tham số chunking/top-k, khoá API.
+- `logs/`: log file (theo `LOG_PATH`).
+
+---
+
+## 2) Sơ đồ kiến trúc (Component Diagram)
+
+```mermaid
+flowchart LR
+  U[Student/User] -->|Chat / Exercise / Dashboard| UI[Streamlit UI\napp.py]
+
+  %% Chat / RAG
+  UI -->|chat(user_prompt)| C[Orchestrator\ncontroller.py]
+  C -->|retrieve_with_sources(query, top_k)| R[Retriever\nretriever.py]
+  R -->|read| F[(FAISS Index\nvector_store/faiss_index.bin)]
+  R -->|read| M[(Chunk Metadata\nvector_store/chunks_metadata.json)]
+  C -->|grounded prompt| L[LLM Provider\nDeepSeek API via OpenAI SDK]
+  L -->|answer text| C --> UI
+
+  %% Practice / DB
+  UI -->|load questions| DB[(SQLite\nDB_PATH)]
+  UI -->|save_history(uid,qid,is_correct)| DB
+  UI -->|render analytics| DB
+
+  %% Adaptive
+  UI -->|after submit| A[Adaptive\nadaptive_logic.py]
+  A -->|read/write| DB
+
+  %% Admin question generation
+  UI -->|generate_batch(topic,difficulty,count)| G[Generator\ngenerator.py]
+  G -->|LLM calls| L
+  UI -->|insert questions| DB
+
+  %% Offline indexing pipeline
+  DOCS[(Docs\nPDF/DOCX under data/)] --> E[Embedder\nembedder.py]
+  E -->|write| F
+  E -->|write| M
+```
+
+---
+
+## 3) Luồng runtime chính
+
+### 3.1 Chat Tutor (RAG)
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant S as Streamlit (app.py)
+  participant C as Controller (controller.chat)
+  participant R as Retriever (retriever.retrieve_with_sources)
+  participant V as Vector Store (FAISS + metadata)
+  participant L as LLM (DeepSeek)
+
+  U->>S: Nhập câu hỏi
+  S->>C: chat(user_input)
+  C->>R: retrieve_with_sources(query, top_k)
+  R->>V: Embed query + FAISS search
+  V-->>R: Top-k chunks (+ source_file)
+  R-->>C: context_chunks + sources
+  C->>L: Prompt (question + context)
+  L-->>C: Answer text
+  C-->>S: Answer (+ citations nếu có)
+  S-->>U: Hiển thị trả lời
+```
+
+**Điểm chốt kỹ thuật**
+- Retrieval dùng cosine-similarity thông qua FAISS inner-product (vector đã normalize).
+- Khi quota/rate-limit LLM, `controller.py` có thể fallback trả về “retrieval-only” context.
+
+### 3.2 Luyện tập (Exercise) + Adaptive
+
+Luồng Exercise trong `app.py` hiện chủ yếu **lấy câu hỏi từ SQLite** theo `level` (và bộ lọc môn học), sau đó:
+1) người học chọn đáp án
+2) lưu kết quả vào `history`
+3) cập nhật level mới bằng `adaptive_logic.get_next_difficulty(uid)`
+4) dashboard đọc lại thống kê từ DB.
+
+---
+
+## 4) Luồng offline build Vector Store
+
+Chỉ cần chạy khi:
+- thay đổi tài liệu trong `data/`
+- hoặc muốn rebuild FAISS index.
+
+```mermaid
+sequenceDiagram
+  participant D as Documents (data/)
+  participant E as embedder.py
+  participant F as vector_store/faiss_index.bin
+  participant M as vector_store/chunks_metadata.json
+
+  D->>E: PDF/DOCX
+  E->>E: extract -> normalize -> chunk (token-based)
+  E->>E: embed chunks (SentenceTransformers)
+  E->>F: write FAISS index
+  E->>M: write metadata (chunk_id, source_file, text...)
+```
+
+---
+
+## 5) “Entry points” và artifacts
+
+### Entry points (chạy chương trình)
+- UI: `streamlit run app.py`
+- Init DB: `python init_db.py`
+- Build vector index: `python embedder.py`
+- Evaluate retrieval: `python rag_tester.py`
+
+### Artifacts quan trọng
+- SQLite DB: theo `DB_PATH` (mặc định `data/ai_tutor_v5.db`)
+- Vector store:
+  - `vector_store/faiss_index.bin`
+  - `vector_store/chunks_metadata.json`
+
+---
+
+## 6) Mapping file → trách nhiệm (tóm tắt)
+
+- UI: `app.py`, `dashboard.py`
+- Điều phối: `controller.py`
+- RAG: `embedder.py`, `retriever.py`
+- Sinh câu hỏi: `generator.py`, `schema.json`, (tuỳ chọn) `json_parser.py`
+- Adaptive: `adaptive_logic.py`
+- DB: `schema.sql`, `init_db.py`, `sqlite_manager.py`
+- Cấu hình: `config.py`, `.env`
+
+Nếu bạn muốn mình bổ sung sơ đồ triển khai (deployment: local vs remote API) hoặc sơ đồ ERD của SQLite (users/questions/history/sessions), nói mình biết format bạn muốn (Mermaid ER diagram hay bảng mô tả).

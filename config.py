@@ -50,6 +50,9 @@ def _to_int(name: str, raw: str, min_value: int | None = None, max_value: int | 
 # Keep optional at import time so Phase 1/2 modules (DB/RAG tooling) can run
 # even before LLM credentials are configured.
 GEMINI_API_KEY: str = _env("GEMINI_API_KEY", default="")
+DEEPSEEK_API_KEY: str = _env("DEEPSEEK_API_KEY", default="")
+DEEPSEEK_MODEL: str = _env("DEEPSEEK_MODEL", default="deepseek-chat")
+DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
 
 def require_gemini_api_key() -> str:
@@ -57,6 +60,15 @@ def require_gemini_api_key() -> str:
     if not GEMINI_API_KEY:
         raise ConfigError("GEMINI_API_KEY is required for Gemini generation features")
     return GEMINI_API_KEY
+
+
+def require_deepseek_api_key() -> str:
+    """Return DEEPSEEK_API_KEY or raise a clear error when DeepSeek features are used."""
+    if not DEEPSEEK_API_KEY:
+        raise ConfigError(
+            "DEEPSEEK_API_KEY is required. Set it in .env: DEEPSEEK_API_KEY=sk-..."
+        )
+    return DEEPSEEK_API_KEY
 
 
 # -------------------------

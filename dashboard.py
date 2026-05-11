@@ -169,7 +169,7 @@ def _build_weak_topic_radar(uid: int) -> go.Figure:
     )
     fig.update_layout(
         title="Điểm mạnh / Điểm yếu theo môn",
-        polar={"radialaxis": {"visible": True, "range": [0, 100], "suffix": "%"}},
+        polar={"radialaxis": {"visible": True, "range": [0, 100], "ticksuffix": "%"}},
         showlegend=False,
     )
     return fig

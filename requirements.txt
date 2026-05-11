@@ -9,6 +9,7 @@ python-dotenv==1.2.2
 jsonschema==4.26.0
 
 # ---------- AI / LLM ----------
+openai>=1.30.0                       # DeepSeek API (OpenAI-compatible client)
 google-generativeai>=0.8.5,<1.0.0   # Gemini API (cloud)
 ollama==0.6.1                        # Ollama API (local)
 

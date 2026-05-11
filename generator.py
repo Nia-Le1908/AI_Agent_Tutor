@@ -1,14 +1,17 @@
 """
-Gemini question generator for AI Tutor V5.1 (Phase 3).
+Question generator for AI Tutor V5.1.
+
+Provider: DeepSeek API (cố định), tương thích OpenAI SDK.
+Yêu cầu: DEEPSEEK_API_KEY trong file .env.
 
 Required interface:
 - generate(topic, difficulty) -> dict
+- generate_batch(topic, difficulty, count) -> list[dict]
 
 Key guarantees:
-1. Uses Gemini API via google-generativeai.
-2. Enforces strict JSON-only output through prompt + parser hardening.
-3. Applies exponential backoff for transient API/rate-limit failures.
-4. Validates final payload against schema.json before returning.
+1. Enforces strict JSON-only output through prompt + parser hardening.
+2. Validates final payload against schema.json before returning.
+3. Falls back to individual calls if batch mode fails.
 """
 
 from __future__ import annotations
@@ -24,8 +27,8 @@ from typing import Any, Dict, List
 from jsonschema import Draft202012Validator
 
 
-# Keep a modern default and allow env override for operations.
-DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5")
+# Default model read from env; falls back to DeepSeek's flagship chat model.
+DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.json"
 
 
@@ -47,49 +50,32 @@ def _build_prompt(topic: str, difficulty: int) -> str:
 Bạn là một chuyên gia giáo dục tạo bài tập trắc nghiệm.
 Hãy tạo ra chính xác MỘT câu hỏi trắc nghiệm bằng TIẾNG VIỆT.
 
-Constraints:
-- topic: {topic}
-- difficulty: {difficulty} (integer from 1 to 5)
-- options must have exactly 4 choices corresponding to A, B, C, D.
-- answer must be one of: A, B, C, D.
-- explanation must be concise but informative.
-- ALL text inside "content", "options", and "explanation" MUST be in VIETNAMESE.
+!!! QUAN TRỌNG NHẤT: Câu hỏi BẮT BUỘC phải thuộc chủ đề "{topic}".
+KHÔNG được tạo câu hỏi về chủ đề khác. Trường "subject" phải là "{topic}".
 
-Output schema (must match exactly):
+Constraints:
+- topic (BẮT BUỘC): {topic}
+- difficulty: {difficulty} (integer from 1 to 5)
+- "content" phải là câu hỏi kiến thức trực tiếp về chủ đề "{topic}".
+- "subject" phải bằng đúng "{topic}".
+- options phải có đúng 4 lựa chọn tương ứng A, B, C, D.
+- answer phải là một trong: A, B, C, D.
+- explanation phải ngắn gọn nhưng đầy đủ thông tin.
+- TẤT CẢ nội dung trong "content", "options", "explanation" phải bằng TIẾNG VIỆT.
+
+Ví dụ cấu trúc JSON (đây chỉ là VÍ DỤ cấu trúc, KHÔNG copy nội dung):
 {{
   "question_id": 101,
-  "content": "2 + 2 bằng bao nhiêu?",
-  "difficulty": 1,
-  "subject": "Toán học",
-  "options": ["1", "2", "3", "4"],
-  "answer": "D",
-  "explanation": "2 cộng 2 bằng 4."
+  "content": "<câu hỏi về {topic}>",
+  "difficulty": {difficulty},
+  "subject": "{topic}",
+  "options": ["<lựa chọn A>", "<lựa chọn B>", "<lựa chọn C>", "<lựa chọn D>"],
+  "answer": "A",
+  "explanation": "<giải thích tại sao đáp án đúng>"
 }}
 
-Few-shot example 1:
-{{
-  "question_id": 102,
-  "content": "Bào quan nào được mệnh danh là nhà máy năng lượng của tế bào?",
-  "difficulty": 2,
-  "subject": "Sinh học",
-  "options": ["Nhân tế bào", "Ty thể", "Ribosome", "Bộ máy Golgi"],
-  "answer": "B",
-  "explanation": "Ty thể tạo ra ATP, nguồn năng lượng chính của tế bào."
-}}
-
-Few-shot example 2:
-{{
-  "question_id": 103,
-  "content": "Nếu một ô tô di chuyển với tốc độ không đổi, đồ thị nào biểu diễn tốt nhất quãng đường theo thời gian?",
-  "difficulty": 3,
-  "subject": "Vật lý",
-  "options": ["Đường ngang", "Đường thẳng có độ dốc dương", "Đường cong tăng dần", "Đường dích dắc"],
-  "answer": "B",
-  "explanation": "Ở tốc độ không đổi, quãng đường tăng tuyến tính theo thời gian."
-}}
-
-Now generate a new question for topic '{topic}' at difficulty {difficulty}.
-Respond ONLY with a valid JSON object, no markdown, no explanation.
+Bây giờ hãy tạo MỘT câu hỏi về chủ đề "{topic}" ở độ khó {difficulty}.
+Trả về CHỈ một JSON object hợp lệ, KHÔNG markdown, KHÔNG giải thích thêm.
 """.strip()
 
 
@@ -106,30 +92,34 @@ def _build_batch_prompt(topic: str, difficulty: int, count: int) -> str:
 Bạn là một chuyên gia giáo dục tạo bài tập trắc nghiệm.
 Hãy tạo ra chính xác {count} câu hỏi trắc nghiệm KHÁC NHAU bằng TIẾNG VIỆT.
 
+!!! QUAN TRỌNG NHẤT: TẤT CẢ {count} câu hỏi BẮT BUỘC phải thuộc chủ đề "{topic}".
+KHÔNG được tạo câu hỏi về chủ đề khác. Trường "subject" của mỗi câu phải là "{topic}".
+
 Constraints:
-- topic: {topic}
+- topic (BẮT BUỘC cho tất cả câu hỏi): {topic}
 - difficulty: {difficulty} (integer from 1 to 5)
+- "content" của mỗi câu phải là kiến thức trực tiếp về "{topic}".
+- "subject" của mỗi câu phải bằng đúng "{topic}".
 - Mỗi câu hỏi phải có options là mảng gồm đúng 4 lựa chọn.
 - answer phải là một trong: A, B, C, D.
 - explanation phải ngắn gọn nhưng đầy đủ thông tin.
-- Các câu hỏi PHẢI KHÁC NHAU, không được trùng nội dung.
-- TẤT CẢ nội dung trong "content", "options", và "explanation" PHẢI bằng TIẾNG VIỆT.
+- Các câu hỏi PHẢI KHÁC NHAU về nội dung, không được trùng lặp.
+- TẤT CẢ nội dung trong "content", "options", "explanation" PHẢI bằng TIẾNG VIỆT.
 
 Định dạng output - trả về một JSON array chứa đúng {count} object:
 [
   {{
     "question_id": 1,
-    "content": "Câu hỏi bằng tiếng Việt?",
+    "content": "<câu hỏi về {topic}>",
     "difficulty": {difficulty},
-    "subject": "Tên môn học",
-    "options": ["Lựa chọn A", "Lựa chọn B", "Lựa chọn C", "Lựa chọn D"],
+    "subject": "{topic}",
+    "options": ["<lựa chọn A>", "<lựa chọn B>", "<lựa chọn C>", "<lựa chọn D>"],
     "answer": "A",
-    "explanation": "Giải thích ngắn gọn."
-  }},
-  ...
+    "explanation": "<giải thích>"
+  }}
 ]
 
-Tạo {count} câu hỏi cho chủ đề '{topic}' ở độ khó {difficulty}.
+Tạo đúng {count} câu hỏi về chủ đề "{topic}" ở độ khó {difficulty}.
 Trả về CHỈ một JSON array hợp lệ, KHÔNG markdown, KHÔNG giải thích thêm.
 """.strip()
 
@@ -200,10 +190,23 @@ def _extract_all_json_objects(text: str) -> List[Dict[str, Any]]:
         bracket_start = cleaned.find("[")
         if bracket_start != -1:
             bracket_depth = 0
+            in_str = False
+            esc = False
             for i in range(bracket_start, len(cleaned)):
-                if cleaned[i] == "[":
+                ch = cleaned[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == "[":
                     bracket_depth += 1
-                elif cleaned[i] == "]":
+                elif ch == "]":
                     bracket_depth -= 1
                     if bracket_depth == 0:
                         array_str = cleaned[bracket_start : i + 1]
@@ -214,20 +217,21 @@ def _extract_all_json_objects(text: str) -> List[Dict[str, Any]]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Fallback: extract individual JSON objects one by one
+    # Fallback: extract individual JSON objects one by one using positional scanning
     objects: List[Dict[str, Any]] = []
-    remaining = cleaned
-    while "{" in remaining:
+    pos = 0
+    while pos < len(cleaned):
+        next_brace = cleaned.find("{", pos)
+        if next_brace == -1:
+            break
         try:
-            json_str = _extract_first_json_object(remaining)
+            json_str = _extract_first_json_object(cleaned[next_brace:])
             obj = json.loads(json_str)
             if isinstance(obj, dict):
                 objects.append(obj)
-            # Move past the extracted object
-            end_pos = remaining.find(json_str) + len(json_str)
-            remaining = remaining[end_pos:]
+            pos = next_brace + len(json_str)
         except (ValueError, json.JSONDecodeError):
-            break
+            pos = next_brace + 1
 
     return objects
 
@@ -257,26 +261,37 @@ def _validate_payload(payload: Dict[str, Any], schema: Dict[str, Any]) -> None:
         raise ValueError(f"Generated payload failed schema validation: {details}")
 
 
-def _call_ollama(prompt: str, model_name: str) -> str:
-    """Gọi Ollama API ở dưới local và ép nó trả về JSON."""
-    import ollama  # Lazy import to avoid crash when Ollama is not installed
+def _call_llm(prompt: str, model_name: str, *, json_mode: bool = False) -> str:
+    """
+    Gọi DeepSeek API và trả về nội dung text.
 
-    response = ollama.chat(
-        model=model_name,
-        messages=[
-            {
-                'role': 'user',
-                'content': prompt,
-            },
-        ],
-        format='json' # Tính năng bá đạo của Ollama: Ép format JSON
+    Args:
+        prompt   : Prompt gửi đến model.
+        model_name: Tên model (mặc định: deepseek-chat).
+        json_mode : Nếu True, ép model trả về JSON object.
+    """
+    from openai import OpenAI
+    from config import DEEPSEEK_BASE_URL, require_deepseek_api_key
+
+    client = OpenAI(
+        api_key=require_deepseek_api_key(),
+        base_url=DEEPSEEK_BASE_URL,
     )
-    return response['message']['content']
+    kwargs: dict = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    response = client.chat.completions.create(**kwargs)
+    return (response.choices[0].message.content or "").strip()
 
 
 def generate(topic: str, difficulty: int, model_name: str = DEFAULT_MODEL) -> Dict[str, Any]:
     """
-    Hàm chính tạo bài tập trắc nghiệm qua Ollama.
+    Hàm chính tạo một câu hỏi trắc nghiệm qua LLM provider đang cấu hình.
     """
     if not isinstance(topic, str) or not topic.strip():
         raise ValueError("topic must be a non-empty string")
@@ -286,9 +301,8 @@ def generate(topic: str, difficulty: int, model_name: str = DEFAULT_MODEL) -> Di
     schema = _load_schema()
     prompt = _build_prompt(topic=topic.strip(), difficulty=difficulty)
 
-    # Gọi thẳng xuống local, không cần API Key, không lo Rate Limit
-    raw_text = _call_ollama(prompt, model_name)
-    
+    raw_text = _call_llm(prompt, model_name, json_mode=True)
+
     payload = _safe_parse_json(raw_text)
     _validate_payload(payload, schema)
 
@@ -302,11 +316,10 @@ def generate_batch(
     model_name: str = DEFAULT_MODEL,
 ) -> List[Dict[str, Any]]:
     """
-    Generate multiple quiz questions in a single Ollama call.
+    Generate multiple quiz questions via the configured LLM provider.
 
-    This is more reliable than calling generate() in a loop because the model
-    produces all questions in one context window, avoiding repeated network
-    round-trips and cumulative failure risk.
+    Falls back to calling generate() individually if the model returns
+    a single object instead of a JSON array.
 
     Returns:
         List of validated question dicts. May return fewer than `count` if
@@ -322,11 +335,8 @@ def generate_batch(
     schema = _load_schema()
     prompt = _build_batch_prompt(topic=topic.strip(), difficulty=difficulty, count=count)
 
-    raw_text = _call_ollama(prompt, model_name)
+    raw_text = _call_llm(prompt, model_name, json_mode=True)
     objects = _extract_all_json_objects(raw_text)
-
-    if not objects:
-        raise ValueError("Model returned no parseable question objects")
 
     # Validate each question individually; keep valid ones
     valid_questions: List[Dict[str, Any]] = []
@@ -337,9 +347,25 @@ def generate_batch(
         except ValueError:
             continue  # Skip invalid questions silently
 
+    # If batch call yielded results, return them
+    if valid_questions:
+        return valid_questions
+
+    # Fallback: model returned a single object or failed array format.
+    # Call generate() individually for each question requested.
+    errors: List[str] = []
+    for i in range(count):
+        try:
+            q = generate(topic=topic.strip(), difficulty=difficulty, model_name=model_name)
+            valid_questions.append(q)
+        except Exception as exc:
+            errors.append(str(exc))
+
     if not valid_questions:
+        err_summary = "; ".join(errors[:3]) if errors else "No questions generated"
         raise ValueError(
-            f"Model returned {len(objects)} object(s) but none passed schema validation"
+            f"generate_batch failed: batch call returned no valid objects and "
+            f"individual fallback also failed. Last errors: {err_summary}"
         )
 
     return valid_questions
