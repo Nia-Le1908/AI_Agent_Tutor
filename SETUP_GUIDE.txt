@@ -1,192 +1,192 @@
 # ================================================================
-#  AI Tutor V5.1 — Hướng dẫn cài đặt trên máy mới
+# AI Tutor V5.1 — SETUP_GUIDE (chạy được ngay)
 # ================================================================
-#  Cập nhật: 2026-04-27
-#  Yêu cầu: Python 3.10+, Git, Ollama (nếu dùng AI local)
+# Cập nhật: 2026-05-11
+#
+# Mục tiêu:
+# - Bạn có thể clone repo -> cài deps -> chạy Streamlit.
+# - Có 2 chế độ:
+#   A) DEMO (không cần API key): chạy Exercise/Dashboard với mock DB.
+#   B) FULL (đầy đủ Chat RAG + tạo câu hỏi): cần DEEPSEEK_API_KEY + build FAISS.
+#
+# Lưu ý bảo mật:
+# - File .env KHÔNG được commit lên GitHub (repo đã ignore).
 # ================================================================
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 1: Clone/Copy dự án
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Copy toàn bộ thư mục AI_agent_gia_su vào máy mới
-# Hoặc nếu dùng Git:
-#   git clone <repo-url> AI_agent_gia_su
-#   cd AI_agent_gia_su
+================================================
+0) Yêu cầu
+================================================
 
-
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 2: Tạo môi trường ảo Python
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# Windows (PowerShell):
-python -m venv venv
-venv\Scripts\activate
-
-# Linux / macOS:
-#   python3 -m venv venv
-#   source venv/bin/activate
+- Python 3.10+ (khuyến nghị 3.10/3.11)
+- Git (tuỳ chọn nếu bạn clone)
+- Windows PowerShell hoặc Terminal
 
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 3: Cài đặt thư viện
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+================================================
+1) Lấy source code
+================================================
 
-pip install --upgrade pip
-pip install -r requirements.txt
+Nếu dùng Git:
+	git clone https://github.com/Nia-Le1908/AI_Agent_Tutor.git
+	cd AI_Agent_Tutor
 
-# Lưu ý: torch khá nặng (~2GB). Nếu chỉ dùng CPU:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 4: Cấu hình file .env
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# Tạo file .env ở thư mục gốc (KHÔNG commit file này lên Git!)
-# Copy nội dung bên dưới và thay bằng key thật của bạn:
-
-# --- Nội dung file .env ---
-# GEMINI_API_KEY=your_gemini_api_key_here
-# GEMINI_MODEL=gemini-1.5-flash
-#
-# DB_PATH=data/ai_tutor_v5.db
-# FAISS_INDEX_PATH=vector_store/faiss_index.bin
-# LOG_PATH=logs/app.log
-#
-# CHUNK_SIZE=256
-# CHUNK_OVERLAP=50
-# TOP_K=3
-#
-# EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-# DEBUG_RAG_CONTEXT=false
-# --- Hết ---
-
-# Lấy Gemini API Key tại: https://aistudio.google.com/apikey
+Nếu bạn copy folder thủ công:
+	mở terminal tại thư mục gốc project (nơi có requirements.txt)
 
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 5: Khởi tạo Database
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+================================================
+2) Tạo venv + cài thư viện
+================================================
 
-python init_db.py
+--- Windows PowerShell ---
 
-# Nếu muốn có dữ liệu mẫu để test ngay:
-python generate_mock_data.py
+	python -m venv .venv
 
+	# Nếu bị chặn activate script:
+	Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 6: Cài đặt Ollama (AI local — tuỳ chọn)
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# Tải Ollama tại: https://ollama.com/download
-# Sau khi cài xong, tải model:
-ollama pull qwen2.5
-
-# Kiểm tra Ollama chạy chưa:
-ollama list
+	.\.venv\Scripts\Activate.ps1
+	python -m pip install --upgrade pip
+	pip install -r requirements.txt
 
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 7: Nạp tài liệu cho RAG (tuỳ chọn)
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--- macOS / Linux (bash/zsh) ---
 
-# Đặt file PDF/DOCX vào thư mục data/raw_docs/
-# Sau đó chạy:
-python embedder.py
-
-# Lệnh này sẽ:
-#   - Đọc tất cả PDF/DOCX trong data/raw_docs/
-#   - Tách nội dung thành các chunk nhỏ
-#   - Tạo vector embeddings bằng model all-MiniLM-L6-v2
-#   - Lưu FAISS index vào vector_store/
+	python3 -m venv .venv
+	source .venv/bin/activate
+	python -m pip install --upgrade pip
+	pip install -r requirements.txt
 
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  BƯỚC 8: Chạy ứng dụng
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+================================================
+3) Tạo file .env (khuyến nghị copy từ .env.example)
+================================================
 
-streamlit run app.py
+--- Windows PowerShell ---
+	Copy-Item .env.example .env
 
-# Trình duyệt sẽ tự mở tại: http://localhost:8501
-# Nếu không tự mở, mở trình duyệt và truy cập URL trên.
+--- macOS / Linux ---
+	cp .env.example .env
 
-
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  XỬ LÝ SỰ CỐ THƯỜNG GẶP
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# ❌ Lỗi "No module named ..."
-#    → Kiểm tra đã activate venv chưa: venv\Scripts\activate
-#    → Chạy lại: pip install -r requirements.txt
-
-# ❌ Lỗi "GEMINI_API_KEY not set"
-#    → Kiểm tra file .env có đúng ở thư mục gốc không
-#    → Key phải bắt đầu bằng "AIza..."
-
-# ❌ Lỗi "Database is locked" hoặc "no such table"
-#    → Chạy lại: python init_db.py
-
-# ❌ Lỗi "Ollama connection refused"
-#    → Mở terminal riêng, chạy: ollama serve
-#    → Kiểm tra: ollama list
-
-# ❌ Lỗi FAISS / "faiss_index.bin not found"
-#    → Chưa nạp tài liệu. Chạy: python embedder.py
-#    → Đảm bảo có file PDF/DOCX trong data/raw_docs/
-
-# ❌ Streamlit mở nhưng trắng / lỗi import
-#    → Dùng đúng Python trong venv:
-#       venv\Scripts\python.exe -m streamlit run app.py
+Sau đó mở .env và chỉnh tuỳ theo chế độ bạn chạy.
 
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  CẤU TRÚC THƯ MỤC
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+================================================
+4A) CHẾ ĐỘ DEMO (không cần API key) — chạy được ngay
+================================================
 
-# AI_agent_gia_su/
-# ├── app.py                 ← Entry point (Streamlit UI)
-# ├── config.py              ← Cấu hình tập trung
-# ├── controller.py          ← Logic chat + exercise
-# ├── generator.py           ← Tạo câu hỏi qua LLM
-# ├── adaptive_logic.py      ← Tự động chỉnh độ khó
-# ├── sqlite_manager.py      ← Truy vấn database
-# ├── embedder.py            ← Pipeline tạo vector
-# ├── retriever.py           ← Tìm kiếm tài liệu
-# ├── dashboard.py           ← Biểu đồ analytics
-# ├── json_parser.py         ← Validate JSON schema
-# ├── init_db.py             ← Khởi tạo database
-# ├── generate_mock_data.py  ← Tạo dữ liệu mẫu
-# ├── seed_db.py             ← Seed câu hỏi từ AI
-# ├── rag_tester.py          ← Test chất lượng RAG
-# ├── schema.json            ← JSON schema cho câu hỏi
-# ├── schema.sql             ← Schema database SQLite
-# ├── requirements.txt       ← Thư viện Python
-# ├── .env                   ← Biến môi trường (KHÔNG commit!)
-# ├── data/
-# │   ├── raw_docs/          ← PDF/DOCX tài liệu
-# │   └── ai_tutor_v5.db     ← SQLite database
-# └── vector_store/          ← FAISS index + metadata
+Mục tiêu: mở UI và dùng Exercise/Dashboard ngay với dữ liệu mock.
+Chat/Admin-Generate sẽ KHÔNG hoạt động nếu không có API key.
+
+1) Tạo mock DB và mock questions:
+	python generate_mock_data.py
+
+2) Mở file .env và đặt:
+	DB_PATH=mock_data/mock_db.sqlite
+
+3) Chạy app:
+	streamlit run app.py
+
+Truy cập: http://localhost:8501
 
 
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-##  TÓM TẮT LỆNH (COPY & PASTE)
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+================================================
+4B) CHẾ ĐỘ FULL (Chat RAG + tạo câu hỏi) — khuyến nghị
+================================================
 
-# --- Cài đặt nhanh (Windows) ---
-# python -m venv venv
-# venv\Scripts\activate
-# pip install --upgrade pip
-# pip install -r requirements.txt
-# python init_db.py
-# python generate_mock_data.py
-# streamlit run app.py
+Bạn cần:
+	- DEEPSEEK_API_KEY (bắt buộc để Chat và tạo câu hỏi)
+	- Có tài liệu PDF/DOCX để build FAISS (bắt buộc để Chat không lỗi retrieval)
 
-# --- Cài đặt nhanh (Linux/macOS) ---
-# python3 -m venv venv
-# source venv/bin/activate
-# pip install --upgrade pip
-# pip install -r requirements.txt
-# python init_db.py
-# python generate_mock_data.py
-# streamlit run app.py
+1) Mở file .env và set tối thiểu:
+
+	# --- LLM (bắt buộc) ---
+	DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+	DEEPSEEK_MODEL=deepseek-chat
+
+	# --- Storage ---
+	DB_PATH=data/ai_tutor_v5.db
+	FAISS_INDEX_PATH=vector_store/faiss_index.bin
+	LOG_PATH=logs/app.log
+
+	# --- RAG tuning ---
+	CHUNK_SIZE=256
+	CHUNK_OVERLAP=50
+	TOP_K=3
+	EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+	DEBUG_RAG_CONTEXT=false
+
+2) Khởi tạo SQLite database:
+	python init_db.py
+
+3) Nạp tài liệu cho RAG (bắt buộc để Chat chạy):
+	- Copy ít nhất 1 file .pdf hoặc .docx vào: data/raw_docs/
+	- Sau đó chạy:
+			python embedder.py
+
+	Kết quả sẽ tạo:
+		- vector_store/faiss_index.bin
+		- vector_store/chunks_metadata.json
+
+4) Chạy app:
+	streamlit run app.py
+
+5) Tạo câu hỏi để Exercise có dữ liệu:
+	- Vào sidebar "Admin Panel (Tạo bài tập)" trong app
+	- Nhập chủ đề + độ khó + số lượng -> bấm tạo
+	- Câu hỏi sẽ được insert vào SQLite (bảng questions)
+
+
+================================================
+5) Lỗi thường gặp (Troubleshooting)
+================================================
+
+1) "No module named ..."
+	- Chưa activate venv hoặc cài deps
+	- PowerShell:
+			.\.venv\Scripts\Activate.ps1
+			pip install -r requirements.txt
+
+2) Chat bị lỗi "DEEPSEEK_API_KEY is required"
+	- Bạn đang chạy FULL nhưng chưa set DEEPSEEK_API_KEY trong .env
+
+3) Chat bị lỗi "FAISS index file not found" hoặc "chunks_metadata.json not found"
+	- Bạn chưa build vector store
+	- Đặt PDF/DOCX vào data/raw_docs/ rồi chạy:
+			python embedder.py
+
+4) Exercise báo không có câu hỏi
+	- DB chưa có dữ liệu trong bảng questions
+	- Cách nhanh nhất: dùng Admin Panel trong app để generate & save vào DB
+
+5) "Database is locked" / "no such table"
+	- Chạy lại init:
+			python init_db.py
+
+
+================================================
+6) Tóm tắt lệnh (copy/paste)
+================================================
+
+--- Windows DEMO ---
+	python -m venv .venv
+	Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+	.\.venv\Scripts\Activate.ps1
+	pip install -r requirements.txt
+	Copy-Item .env.example .env
+	python generate_mock_data.py
+	# sửa .env: DB_PATH=mock_data/mock_db.sqlite
+	streamlit run app.py
+
+--- Windows FULL ---
+	python -m venv .venv
+	Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+	.\.venv\Scripts\Activate.ps1
+	pip install -r requirements.txt
+	Copy-Item .env.example .env
+	# sửa .env: set DEEPSEEK_API_KEY
+	python init_db.py
+	# copy PDF/DOCX vào data/raw_docs/
+	python embedder.py
+	streamlit run app.py
