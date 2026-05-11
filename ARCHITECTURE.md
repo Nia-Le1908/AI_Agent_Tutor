@@ -50,35 +50,30 @@ Tài liệu này mô tả kiến trúc (components + luồng dữ liệu) của 
 
 ```mermaid
 flowchart LR
-  U[Student/User] -->|Chat / Exercise / Dashboard| UI[Streamlit UI<br/>app.py]
+  U["Student/User"] -->|"Chat / Exercise / Dashboard"| UI["Streamlit UI<br/>app.py"]; 
 
-  %% Chat / RAG
-  UI -->|chat(user_prompt)| C[Orchestrator<br/>controller.py]
-  C -->|retrieve_with_sources(query, top_k)| R[Retriever<br/>retriever.py]
-  R -->|read| F[(FAISS Index<br/>vector_store/faiss_index.bin)]
-  R -->|read| M[(Chunk Metadata<br/>vector_store/chunks_metadata.json)]
-  C -->|grounded prompt| L[LLM Provider<br/>DeepSeek API via OpenAI SDK]
-  L -->|answer text| C
-  C --> UI
+  UI -->|"chat(user_prompt)"| C["Orchestrator<br/>controller.py"]; 
+  C -->|"retrieve_with_sources(query, top_k)"| R["Retriever<br/>retriever.py"]; 
+  R -->|read| F[("FAISS Index<br/>vector_store/faiss_index.bin")]; 
+  R -->|read| M[("Chunk Metadata<br/>vector_store/chunks_metadata.json")]; 
+  C -->|"grounded prompt"| L["LLM Provider<br/>DeepSeek API via OpenAI SDK"]; 
+  L -->|"answer text"| C; 
+  C --> UI; 
 
-  %% Practice / DB
-  UI -->|load questions| DB[(SQLite<br/>DB_PATH)]
-  UI -->|save_history(uid,qid,is_correct)| DB
-  UI -->|render analytics| DB
+  UI -->|"load questions"| DB[("SQLite<br/>DB_PATH")]; 
+  UI -->|"save_history(uid,qid,is_correct)"| DB; 
+  UI -->|"render analytics"| DB; 
 
-  %% Adaptive
-  UI -->|after submit| A[Adaptive<br/>adaptive_logic.py]
-  A -->|read/write| DB
+  UI -->|"after submit"| A["Adaptive<br/>adaptive_logic.py"]; 
+  A -->|"read/write"| DB; 
 
-  %% Admin question generation
-  UI -->|generate_batch(topic,difficulty,count)| G[Generator<br/>generator.py]
-  G -->|LLM calls| L
-  UI -->|insert questions| DB
+  UI -->|"generate_batch(topic,difficulty,count)"| G["Generator<br/>generator.py"]; 
+  G -->|"LLM calls"| L; 
+  UI -->|"insert questions"| DB; 
 
-  %% Offline indexing pipeline
-  DOCS[(Docs<br/>PDF/DOCX under data/)] --> E[Embedder<br/>embedder.py]
-  E -->|write| F
-  E -->|write| M
+  DOCS[("Docs<br/>PDF/DOCX under data/")] --> E["Embedder<br/>embedder.py"]; 
+  E -->|write| F; 
+  E -->|write| M;
 ```
 
 ---
