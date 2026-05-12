@@ -165,4 +165,89 @@ sequenceDiagram
 - DB: `schema.sql`, `init_db.py`, `sqlite_manager.py`
 - Cấu hình: `config.py`, `.env`
 
-Nếu bạn muốn mình bổ sung sơ đồ triển khai (deployment: local vs remote API) hoặc sơ đồ ERD của SQLite (users/questions/history/sessions), nói mình biết format bạn muốn (Mermaid ER diagram hay bảng mô tả).
+---
+
+## 7) Sơ đồ triển khai (Deployment: local vs remote API)
+
+Mô hình triển khai mặc định là **chạy local** (Streamlit + SQLite + FAISS), và gọi **remote LLM API** (DeepSeek) qua Internet.
+
+```mermaid
+flowchart TB
+  subgraph LOCAL["Local machine"]
+    UI["Browser<br/>http://localhost:8501"];
+    APP["Streamlit app<br/>app.py"];
+    CTRL["Orchestrator<br/>controller.py"];
+    DB[("SQLite DB<br/>data/ai_tutor_v5.db")];
+    VS[("Vector Store<br/>FAISS index + metadata")];
+    RET["Retriever<br/>retriever.py"];
+    GEN["Question generator<br/>generator.py"];
+    EMB["Embedder (offline)<br/>embedder.py"];
+    DOCS[("Docs<br/>data/raw_docs/*.pdf|*.docx")];
+  end
+
+  subgraph REMOTE["Remote services"]
+    LLM["DeepSeek API<br/>https://api.deepseek.com"];
+  end
+
+  UI -->|"HTTP"| APP;
+  APP -->|"chat() / generate_batch()"| CTRL;
+  CTRL -->|"read/write"| DB;
+
+  CTRL -->|"retrieve_with_sources()"| RET;
+  RET -->|"read"| VS;
+
+  CTRL -->|"LLM request"| LLM;
+  GEN -->|"LLM request"| LLM;
+
+  DOCS -->|"parse + chunk + embed"| EMB;
+  EMB -->|"write"| VS;
+
+  APP -->|"Admin Panel: generate & save"| GEN;
+  GEN -->|"insert"| DB;
+```
+
+**Ghi chú**
+- Chế độ **DEMO** có thể chạy mà không cần remote API bằng cách trỏ `DB_PATH` sang `mock_data/mock_db.sqlite` (Exercise/Dashboard vẫn dùng được).
+- Chat RAG cần có artifacts `vector_store/faiss_index.bin` và `vector_store/chunks_metadata.json` (tạo bằng `python embedder.py`).
+
+---
+
+## 8) ERD SQLite (users/questions/history/sessions)
+
+ERD dưới đây bám sát `schema.sql`. (Tên bảng trong DB là chữ thường; sơ đồ dùng chữ hoa để dễ đọc.)
+
+```mermaid
+erDiagram
+  USERS {
+    INTEGER id PK
+    TEXT name
+    INTEGER level
+  }
+
+  QUESTIONS {
+    INTEGER id PK
+    TEXT content
+    INTEGER difficulty
+    TEXT subject
+    TEXT options
+    TEXT answer
+    TEXT explanation
+  }
+
+  HISTORY {
+    INTEGER uid FK
+    INTEGER qid FK
+    INTEGER is_correct
+    TEXT timestamp
+  }
+
+  SESSIONS {
+    INTEGER uid FK
+    TEXT start_time
+    REAL score
+  }
+
+  USERS ||--o{ HISTORY : "answers"
+  QUESTIONS ||--o{ HISTORY : "is attempted"
+  USERS ||--o{ SESSIONS : "has"
+```
