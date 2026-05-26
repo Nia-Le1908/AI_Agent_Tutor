@@ -1,5 +1,5 @@
 """
-Main orchestration logic for AI Tutor V5.1 (Phase 3).
+Main orchestration logic for AI Tutor (Phase 3).
 
 Responsibilities:
 1. Chat flow: user input -> retrieve context -> prompt Gemini -> answer text.
@@ -13,7 +13,6 @@ Notes:
 
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import random
@@ -21,7 +20,7 @@ import time
 from typing import Any, Dict, List
 
 from adaptive_logic import get_next_difficulty
-from config import TOP_K, DEEPSEEK_BASE_URL, require_deepseek_api_key, require_gemini_api_key
+from config import TOP_K, DEEPSEEK_BASE_URL, require_deepseek_api_key
 from generator import DEFAULT_MODEL, generate
 from retriever import retrieve, retrieve_with_sources
 
@@ -113,12 +112,14 @@ def _generate_text_with_backoff(
     """
     Gửi prompt đến DeepSeek API với exponential backoff.
     """
+    api_key = require_deepseek_api_key()
+
     last_error: Exception | None = None
 
     for attempt in range(max_attempts):
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=require_deepseek_api_key(), base_url=DEEPSEEK_BASE_URL)
+            client = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],

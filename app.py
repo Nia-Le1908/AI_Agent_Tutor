@@ -1,5 +1,5 @@
 """
-Main Streamlit app for AI Tutor V5.1 (Phase 4).
+Main Streamlit app for AI Tutor (Phase 4).
 
 Key requirement handled in this file:
 - Streamlit reruns on every interaction, so we persist critical app context in
@@ -46,7 +46,7 @@ def _safe_init_db() -> None:
     try:
         initialize_database()
     except Exception as exc:
-        st.error(f"Failed to initialize database: {exc}")
+        st.error(f"Không thể khởi tạo cơ sở dữ liệu: {exc}")
         st.stop()
 
 
@@ -117,7 +117,7 @@ def _load_random_question_for_current_level() -> None:
         subject_info = f" cho môn '{subject}'" if subject_param else ""
         st.session_state["last_feedback"] = (
             f"Không tìm thấy câu hỏi ở độ khó {level}{subject_info}. "
-            "Hãy thểm câu hỏi vào Database hoặc đổi bộ lọc."
+            "Hãy thêm câu hỏi vào cơ sở dữ liệu hoặc đổi bộ lọc."
         )
         return
 
@@ -158,35 +158,35 @@ def _parse_options(options_json: str) -> Dict[str, str]:
 
 def _render_sidebar() -> None:
     """Render user setup controls and keep selected user in session state."""
-    st.sidebar.title("AI Tutor V5.1")
-    st.sidebar.caption("Personalized learning assistant")
+    st.sidebar.title("AI Tutor")
+    st.sidebar.caption("Trợ lý học tập cá nhân hóa")
 
     name_input = st.sidebar.text_input(
-        "Student name",
+        "Tên học viên",
         value=st.session_state["user_name"],
         max_chars=100,
     )
 
-    if st.sidebar.button("Start / Load User", width="stretch"):
+    if st.sidebar.button("Tạo / Tải người dùng", width="stretch"):
         if not name_input.strip():
-            st.sidebar.warning("Please enter a valid student name.")
+            st.sidebar.warning("Vui lòng nhập tên học viên hợp lệ.")
         else:
             uid = _get_or_create_user(name_input)
             st.session_state["user_id"] = uid
             st.session_state["user_name"] = name_input.strip()
-            st.sidebar.success(f"Active user ID: {uid}")
+            st.sidebar.success(f"Mã người dùng đang sử dụng: {uid}")
 
     st.sidebar.markdown("---")
-    st.sidebar.write(f"Current level: {st.session_state['current_level']}")
-    st.sidebar.write(f"User ID: {st.session_state['user_id']}")
+    st.sidebar.write(f"Độ khó hiện tại: {st.session_state['current_level']}")
+    st.sidebar.write(f"Mã người dùng: {st.session_state['user_id']}")
 
 
 def _render_chat_tab() -> None:
     """Render chatbot interface with persistent chat history."""
-    st.subheader("Chat Tutor")
+    st.subheader("Trợ lý trò chuyện")
 
     if not st.session_state["user_id"]:
-        st.info("Create or load a user from the sidebar first.")
+        st.info("Hãy tạo hoặc tải người dùng từ thanh bên trước.")
         return
 
     # Replay chat history on every rerun.
@@ -194,7 +194,7 @@ def _render_chat_tab() -> None:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    user_prompt = st.chat_input("Ask your tutor anything...")
+    user_prompt = st.chat_input("Nhập câu hỏi cho trợ lý...")
 
     if user_prompt:
         st.session_state["chat_history"].append({"role": "user", "content": user_prompt})
@@ -203,11 +203,11 @@ def _render_chat_tab() -> None:
             st.markdown(user_prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.spinner("Đang suy nghĩ..."):
                 try:
                     answer = chat(user_prompt)
                 except Exception as exc:
-                    answer = f"Error while generating answer: {exc}"
+                    answer = f"Lỗi khi tạo câu trả lời: {exc}"
                 st.markdown(answer)
 
         st.session_state["chat_history"].append({"role": "assistant", "content": answer})
@@ -218,7 +218,7 @@ def _render_exercise_tab() -> None:
     st.subheader("📝 Luyện tập")
 
     if not st.session_state["user_id"]:
-        st.info("Hãy tạo hoặc chọn user ở sidebar trước.")
+        st.info("Hãy tạo hoặc chọn người dùng ở thanh bên trước.")
         return
 
     # --- Filter controls ---
@@ -253,29 +253,29 @@ def _render_exercise_tab() -> None:
         if st.session_state["last_feedback"]:
             st.warning(st.session_state["last_feedback"])
         else:
-            st.info("Click 'Load Question' to start practicing.")
+            st.info("Bấm 'Tải câu hỏi mới' để bắt đầu luyện tập.")
         return
 
-    st.markdown(f"**Question #{question['id']}**")
+    st.markdown(f"**Câu hỏi #{question['id']}**")
     st.write(question["content"])
 
     options_map = _parse_options(question.get("options", ""))
     if not options_map or not all(options_map.values()):
-        st.error("This question has invalid options format in database.")
+        st.error("Câu hỏi này có định dạng đáp án không hợp lệ trong cơ sở dữ liệu.")
         return
 
     option_labels = [f"{key}. {value}" for key, value in options_map.items()]
 
     selected = st.radio(
-        "Choose your answer:",
+        "Chọn đáp án của bạn:",
         options=option_labels,
         index=None,
         key="exercise_option_radio",
     )
 
-    if st.button("Submit Answer", type="primary", width="stretch"):
+    if st.button("Nộp đáp án", type="primary", width="stretch"):
         if not selected:
-            st.warning("Please select an answer before submitting.")
+            st.warning("Vui lòng chọn một đáp án trước khi nộp.")
             return
 
         chosen_letter = selected.split(".", 1)[0].strip().upper()
@@ -293,25 +293,25 @@ def _render_exercise_tab() -> None:
             new_level = get_next_difficulty(int(st.session_state["user_id"]))
             st.session_state["current_level"] = int(new_level)
         except Exception as exc:
-            st.error(f"Failed to save result: {exc}")
+            st.error(f"Không thể lưu kết quả: {exc}")
             return
 
         if is_correct:
-            st.success("Correct!")
+            st.success("Chính xác!")
         else:
-            st.error(f"Incorrect. Correct answer is {correct_letter}.")
+            st.error(f"Chưa đúng. Đáp án đúng là {correct_letter}.")
 
         explanation = str(question.get("explanation", "")).strip()
         if explanation:
-            st.info(f"Explanation: {explanation}")
+            st.info(f"Giải thích: {explanation}")
 
 
 def _render_dashboard_tab() -> None:
     """Render learning analytics charts using Plotly."""
-    st.subheader("Dashboard")
+    st.subheader("Thống kê học tập")
 
     if not st.session_state["user_id"]:
-        st.info("Create or load a user from the sidebar first.")
+        st.info("Hãy tạo hoặc tải người dùng từ thanh bên trước.")
         return
 
     render_dashboard(int(st.session_state["user_id"]))
@@ -320,25 +320,25 @@ def _render_dashboard_tab() -> None:
 def _render_admin_panel() -> None:
     """Render admin panel for generating multiple questions via Ollama."""
     st.sidebar.markdown("---")
-    st.sidebar.header("🛠️ Admin Panel (Tạo bài tập)")
+    st.sidebar.header("🛠️ Quản trị tạo bài tập")
     new_topic = st.sidebar.text_input("Nhập chủ đề muốn AI tạo:")
     new_diff = st.sidebar.slider("Chọn độ khó:", 1, 5, 1)
     num_questions = st.sidebar.slider("Số lượng câu hỏi:", 2, 10, 3)
 
-    if st.sidebar.button("Sinh câu hỏi & Lưu vào DB", width="stretch"):
+    if st.sidebar.button("Sinh câu hỏi và lưu", width="stretch"):
         if not new_topic:
             st.sidebar.warning("Vui lòng nhập chủ đề trước!")
             return
 
         progress_bar = st.sidebar.progress(
-            0, text=f"🤖 Ollama đang tạo {num_questions} câu hỏi..."
+            0, text=f"🤖 AI đang tạo {num_questions} câu hỏi..."
         )
 
         try:
             questions = generate_batch(
                 topic=new_topic, difficulty=new_diff, count=num_questions
             )
-            progress_bar.progress(70, text="💾 Đang lưu vào Database...")
+            progress_bar.progress(70, text="💾 Đang lưu vào cơ sở dữ liệu...")
 
             saved = 0
             conn = _get_connection()
@@ -370,7 +370,7 @@ def _render_admin_panel() -> None:
             )
             if saved < num_questions:
                 st.sidebar.info(
-                    f"ℹ️ {num_questions - saved} câu không đạt validation đã bị bỏ qua."
+                    f"ℹ️ {num_questions - saved} câu không đạt kiểm tra định dạng đã bị bỏ qua."
                 )
         except Exception as e:
             progress_bar.progress(100, text="❌ Lỗi!")
@@ -380,7 +380,7 @@ def _render_admin_panel() -> None:
 def main() -> None:
     """Application entrypoint."""
     st.set_page_config(
-        page_title="AI Tutor V5.1",
+        page_title="AI Tutor",
         page_icon="🎓",
         layout="wide",
     )
@@ -390,9 +390,11 @@ def main() -> None:
     _render_sidebar()
     _render_admin_panel()
 
-    st.title("AI Tutor V5.1")
+    st.title("AI Tutor")
 
-    tab_chat, tab_exercise, tab_dashboard = st.tabs(["Chat", "Exercise", "Dashboard"])
+    tab_chat, tab_exercise, tab_dashboard = st.tabs(
+        ["Trò chuyện", "Luyện tập", "Thống kê"]
+    )
 
     with tab_chat:
         _render_chat_tab()

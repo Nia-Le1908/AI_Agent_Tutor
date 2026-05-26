@@ -1,5 +1,5 @@
 """
-Phase 2 - Retrieval over FAISS index for AI Tutor V5.1.
+Phase 2 - Retrieval over FAISS index for AI Tutor.
 
 This module provides:
 - retrieve(query: str, top_k: int) -> List[str]

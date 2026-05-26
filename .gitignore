@@ -1,5 +1,5 @@
 # ================================================================
-# AI Tutor V5.1 - Git ignore rules for security, size, and local artifacts
+# AI Tutor - Git ignore rules for security, size, and local artifacts
 # ================================================================
 
 # -------------------------
@@ -38,6 +38,7 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # -------------------------
 # Secrets and environment files
@@ -52,6 +53,8 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 *.db
+*.db-journal
+*.sqlite-journal
 
 # -------------------------
 # Vector store / heavy indexes
@@ -65,6 +68,21 @@ vector_store/chunks_metadata.json
 # -------------------------
 logs/
 *.log
+
+# -------------------------
+# Temporary files
+# -------------------------
+tmp/
+tmp_*/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# Microsoft Office temporary lock files.
+~$*.docx
+~$*.xlsx
+~$*.pptx
 
 # -------------------------
 # Raw document inputs (data folders)
@@ -108,7 +126,14 @@ mock_data/*.db
 mock_data/*.json
 
 # -------------------------
+# Report/document folders
+# -------------------------
+# Keep report source/deliverables in file_md/ by default.
+# If you do not want to push Word binaries, uncomment the next line.
+file_md/*.docx
+
+# -------------------------
 # Streamlit local cache/state
 # -------------------------
-.streamlit/secrets.toml
-.streamlit/cache/
+.streamlit/
+!.streamlit/config.toml

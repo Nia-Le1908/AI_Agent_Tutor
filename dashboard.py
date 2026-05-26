@@ -1,5 +1,5 @@
 """
-Dashboard module for AI Tutor V5.1 (Phase 4).
+Dashboard module for AI Tutor (Phase 4).
 
 This file is intentionally independent from app.py so charts can be reused in
 other entry points (for example a dedicated analytics page later).
@@ -161,7 +161,7 @@ def _build_weak_topic_radar(uid: int) -> go.Figure:
                 r=accuracies_closed,
                 theta=subjects_closed,
                 fill="toself",
-                name="Accuracy %",
+                name="Độ chính xác (%)",
                 line={"color": "#636EFA", "width": 2},
                 fillcolor="rgba(99, 110, 250, 0.25)",
             )
@@ -213,7 +213,7 @@ def _build_progress_line(timeline_rows: List[sqlite3.Row]) -> go.Figure:
                 x=x_vals,
                 y=y_vals,
                 mode="lines+markers",
-                name="Cumulative Accuracy",
+                name="Độ chính xác tích lũy",
                 line={"width": 3, "color": "#00CC96"},
             )
         ]
@@ -238,7 +238,7 @@ def _build_difficulty_bar(diff_rows: List[sqlite3.Row]) -> go.Figure:
         avg_score = float(row["avg_score"] or 0.0) * 100.0
         total_attempts = int(row["total_attempts"] or 0)
 
-        x_vals.append(f"Level {difficulty}")
+        x_vals.append(f"Độ khó {difficulty}")
         y_vals.append(avg_score)
         text_vals.append(f"{avg_score:.1f}% ({total_attempts} câu)")
 
@@ -275,7 +275,7 @@ def render_dashboard(uid: int) -> None:
         uid: user id in the users table.
     """
     if not isinstance(uid, int) or uid <= 0:
-        st.warning("Please select a valid user before opening the dashboard.")
+        st.warning("Vui lòng chọn người dùng hợp lệ trước khi mở thống kê.")
         return
 
     st.subheader("📊 Phân tích học tập")
@@ -286,7 +286,7 @@ def render_dashboard(uid: int) -> None:
     m1.metric("📝 Tổng câu đã làm", stats["total_attempted"])
     m2.metric("✅ Số câu đúng", stats["total_correct"])
     m3.metric("🎯 Độ chính xác", f"{stats['accuracy']:.1f}%")
-    m4.metric("🔥 Streak hiện tại", f"{stats['current_streak']} câu")
+    m4.metric("🔥 Chuỗi đúng hiện tại", f"{stats['current_streak']} câu")
 
     st.markdown("---")
 

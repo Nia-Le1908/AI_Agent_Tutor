@@ -21,12 +21,12 @@ def seed_questions():
         "Bảo mật hệ thống thông tin"
     ]
     
-    print("🚀 Đang khởi động Ollama sinh câu hỏi. Quá trình này sẽ phụ thuộc vào tốc độ máy tính của bạn...")
+    print("🚀 Đang khởi động Deepseek sinh câu hỏi. Quá trình này sẽ phụ thuộc vào tốc độ máy tính của bạn...")
     
     for topic in topics:
         print(f"\n⏳ Đang tạo câu hỏi Level 1 cho chủ đề: {topic}")
         try:
-            # Gọi trực tiếp Ollama qua file generator.py
+            # Gọi trực tiếp Deepseek qua file generator.py
             q_dict = generate(topic=topic, difficulty=1)
             
             # Chuyển mảng options thành chuỗi JSON để lưu vào DB

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ================================================================
-# AI Tutor V5.1 bootstrap script
+# AI Tutor bootstrap script
 # - Checks Python and pip
 # - Creates/uses virtual environment
 # - Installs dependencies

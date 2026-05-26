@@ -1,0 +1,491 @@
+# ================================================================
+# AI Tutor - SETUP GUIDE
+# ================================================================
+# Muc tieu:
+# - Cai moi project tu source code hien tai.
+# - Chay duoc giao dien Streamlit.
+# - Ho tro 2 che do:
+#   A) DEMO: khong can API key, dung mock database cho Exercise/Dashboard.
+#   B) FULL: dung DeepSeek API, SQLite database that, FAISS vector store.
+#
+# Luu y bao mat:
+# - Khong commit file .env len GitHub.
+# - Khong chia se DEEPSEEK_API_KEY trong bao cao, slide hoac anh chup man hinh.
+# ================================================================
+
+
+================================================
+0) Cau truc project hien tai
+================================================
+
+Thu muc goc project gom cac file/chuc nang chinh:
+
+- app.py                  : Giao dien Streamlit chinh.
+- dashboard.py            : Bieu do thong ke hoc tap bang Plotly.
+- controller.py           : Dieu phoi Chat RAG va sinh bai tap.
+- generator.py            : Goi DeepSeek API de sinh cau hoi trac nghiem.
+- adaptive_logic.py       : Dieu chinh do kho theo lich su dung/sai.
+- sqlite_manager.py       : Cac ham truy van SQLite.
+- init_db.py              : Khoi tao database tu schema.sql.
+- schema.sql              : Cau truc bang users, questions, history, sessions.
+- schema.json             : Schema validate cau hoi AI sinh ra.
+- json_parser.py          : Parse JSON cau hoi va insert vao database.
+- embedder.py             : Doc PDF/DOCX, chia chunk, tao embedding va FAISS index.
+- retriever.py            : Truy xuat top-k chunk tu FAISS index.
+- rag_tester.py           : Danh gia retrieval bang Precision@3 va MRR.
+- generate_mock_data.py   : Tao du lieu demo trong mock_data/.
+- requirements.txt        : Danh sach thu vien can cai.
+- .env.example            : Mau cau hinh moi truong.
+
+Thu muc runtime/artifact:
+
+- data/                   : Chua SQLite DB va tai lieu PDF/DOCX cho RAG.
+- vector_store/           : Chua faiss_index.bin va chunks_metadata.json.
+- mock_data/              : Chua mock_questions.json va mock_db.sqlite.
+- logs/                   : Chua file log runtime.
+
+
+================================================
+1) Yeu cau moi truong
+================================================
+
+- Python 3.10+ (khuyen nghi Python 3.11).
+- pip.
+- Windows PowerShell, Command Prompt, macOS Terminal hoac Linux shell.
+- Internet khi cai thu vien va khi goi DeepSeek API.
+
+Kiem tra Python:
+
+    python --version
+
+Tren Linux/macOS co the can dung:
+
+    python3 --version
+
+
+================================================
+2) Tao virtual environment va cai thu vien
+================================================
+
+--- Windows PowerShell ---
+
+    python -m venv .venv
+
+    # Neu bi chan activate script:
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+
+    .\.venv\Scripts\Activate.ps1
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+
+
+--- Windows Command Prompt ---
+
+    python -m venv .venv
+    .venv\Scripts\activate.bat
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+
+
+--- macOS / Linux ---
+
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+
+
+Kiem tra package:
+
+    python -m pip check
+
+
+================================================
+3) Tao va chinh file .env
+================================================
+
+Tao file .env tu mau:
+
+--- Windows PowerShell ---
+
+    Copy-Item .env.example .env
+
+--- macOS / Linux ---
+
+    cp .env.example .env
+
+Mo file .env va dam bao co cac bien phu hop voi code hien tai.
+Neu .env.example con cac bien cu nhu GEMINI_API_KEY, LLM_PROVIDER, OLLAMA_MODEL
+thi co the giu lai nhung khong bat buoc cho luong DeepSeek hien tai.
+
+Cau hinh khuyen nghi cho FULL mode:
+
+    DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+    DEEPSEEK_MODEL=deepseek-chat
+
+    DB_PATH=data/ai_tutor_v5.db
+    FAISS_INDEX_PATH=vector_store/faiss_index.bin
+    LOG_PATH=logs/app.log
+
+    CHUNK_SIZE=256
+    CHUNK_OVERLAP=50
+    TOP_K=3
+    EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+    DEBUG_RAG_CONTEXT=false
+
+Ghi chu:
+
+- DEEPSEEK_API_KEY can cho Chat Tutor va Admin Panel sinh cau hoi.
+- DB_PATH chi toi file SQLite.
+- FAISS_INDEX_PATH chi toi FAISS index.
+- CHUNK_SIZE phai nam trong khoang 256 den 512.
+- CHUNK_OVERLAP phai nho hon CHUNK_SIZE.
+- TOP_K la so chunk duoc truy xuat khi chat.
+
+
+================================================
+4A) Che do DEMO - khong can API key
+================================================
+
+Muc tieu:
+
+- Chay UI nhanh.
+- Dung duoc Exercise va Dashboard voi du lieu mock.
+- Khong can DeepSeek API key.
+
+Cac buoc:
+
+1) Tao mock questions va mock database:
+
+    python generate_mock_data.py
+
+2) Mo file .env va dat:
+
+    DB_PATH=mock_data/mock_db.sqlite
+
+3) Chay app:
+
+    streamlit run app.py
+
+4) Mo trinh duyet:
+
+    http://localhost:8501
+
+Luu y:
+
+- Chat Tutor co the loi neu chua co DEEPSEEK_API_KEY.
+- Admin Panel sinh cau hoi cung can DEEPSEEK_API_KEY.
+- Che do DEMO phu hop de chup anh giao dien Exercise/Dashboard va demo nhanh.
+
+
+================================================
+4B) Che do FULL - Chat RAG + sinh cau hoi AI
+================================================
+
+Muc tieu:
+
+- Dung database that trong data/ai_tutor_v5.db.
+- Dung Chat Tutor co RAG.
+- Sinh cau hoi bang DeepSeek API va luu vao SQLite.
+
+Cac buoc:
+
+1) Cau hinh .env:
+
+    DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+    DEEPSEEK_MODEL=deepseek-chat
+    DB_PATH=data/ai_tutor_v5.db
+    FAISS_INDEX_PATH=vector_store/faiss_index.bin
+    LOG_PATH=logs/app.log
+    CHUNK_SIZE=256
+    CHUNK_OVERLAP=50
+    TOP_K=3
+    EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+
+2) Khoi tao SQLite database:
+
+    python init_db.py
+
+3) Them tai lieu cho RAG:
+
+    - Copy file .pdf hoac .docx vao thu muc data/.
+    - embedder.py se quet de quy trong data/ va lay cac file PDF/DOCX.
+
+4) Build FAISS vector store:
+
+    python embedder.py
+
+Ket qua tao ra:
+
+    vector_store/faiss_index.bin
+    vector_store/chunks_metadata.json
+
+5) Chay app:
+
+    streamlit run app.py
+
+6) Tao user trong sidebar:
+
+    - Nhap Student name.
+    - Bam Start / Load User.
+
+7) Tao cau hoi cho Exercise:
+
+    - Dung Admin Panel trong sidebar.
+    - Nhap chu de.
+    - Chon do kho.
+    - Chon so luong cau hoi.
+    - Bam nut sinh cau hoi va luu vao DB.
+
+8) Dung cac tab:
+
+    - Chat      : hoi dap dua tren tai lieu RAG.
+    - Exercise  : lam cau hoi trac nghiem theo level hien tai.
+    - Dashboard : xem thong ke hoc tap.
+
+
+================================================
+5) Cac lenh chay rieng tung module
+================================================
+
+Khoi tao database:
+
+    python init_db.py
+
+Build vector store tu PDF/DOCX trong data/:
+
+    python embedder.py
+
+Tao mock data:
+
+    python generate_mock_data.py
+
+Danh gia RAG retrieval:
+
+    python rag_tester.py
+
+Chay app:
+
+    streamlit run app.py
+
+Kiem tra cu phap Python:
+
+    python -m compileall -q .
+
+Kiem tra dependency:
+
+    python -m pip check
+
+
+================================================
+6) Du lieu dau vao va dau ra quan trong
+================================================
+
+Input:
+
+- File .env.
+- File PDF/DOCX trong data/.
+- Cau hoi nguoi dung nhap trong UI.
+- Cau tra loi nguoi hoc trong tab Exercise.
+
+Output:
+
+- SQLite DB:
+    data/ai_tutor_v5.db
+
+- FAISS vector store:
+    vector_store/faiss_index.bin
+    vector_store/chunks_metadata.json
+
+- Mock data:
+    mock_data/mock_questions.json
+    mock_data/mock_db.sqlite
+
+- Log:
+    logs/app.log
+
+
+================================================
+7) Troubleshooting
+================================================
+
+1) Loi "No module named ..."
+
+Nguyen nhan:
+
+- Chua activate .venv.
+- Chua cai requirements.
+
+Cach sua:
+
+    .\.venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
+
+
+2) Loi "DEEPSEEK_API_KEY is required"
+
+Nguyen nhan:
+
+- Dang dung Chat/Admin Generate nhung .env chua co DEEPSEEK_API_KEY.
+
+Cach sua:
+
+    DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+Sau do chay lai app.
+
+
+3) Loi "FAISS index file not found" hoac "chunks_metadata.json not found"
+
+Nguyen nhan:
+
+- Chua build vector store.
+
+Cach sua:
+
+    - Dat PDF/DOCX vao data/.
+    - Chay:
+
+        python embedder.py
+
+
+4) Chat khong tim thay context phu hop
+
+Nguyen nhan co the:
+
+- Chua co tai lieu phu hop trong data/.
+- Tai lieu qua ngan hoac khong trich xuat duoc text.
+- Chua rebuild index sau khi them tai lieu moi.
+
+Cach sua:
+
+    python embedder.py
+
+
+5) Exercise bao khong co cau hoi
+
+Nguyen nhan:
+
+- Bang questions dang rong.
+- Bo loc subject/level khong co cau hoi phu hop.
+- Tuy chon bo qua cau da lam dung dang loai het cau hoi.
+
+Cach sua:
+
+- Dung Admin Panel de sinh cau hoi moi.
+- Hoac chay DEMO mode voi mock_data/mock_db.sqlite.
+- Doi subject filter ve "Tat ca".
+- Tat tuy chon bo qua cau da lam dung neu can.
+
+
+6) Loi "no such table"
+
+Nguyen nhan:
+
+- Database chua duoc khoi tao.
+- DB_PATH dang tro sai file.
+
+Cach sua:
+
+    python init_db.py
+
+Kiem tra lai DB_PATH trong .env.
+
+
+7) rag_tester.py bao khong du 20 chunks
+
+Nguyen nhan:
+
+- Corpus trong vector_store co it hon 20 chunks.
+
+Cach sua:
+
+- Them tai lieu PDF/DOCX vao data/.
+- Chay lai:
+
+    python embedder.py
+
+
+8) Khong cai duoc faiss-cpu
+
+Nguyen nhan co the:
+
+- Python version hoac he dieu hanh khong co wheel phu hop.
+
+Cach sua:
+
+- Dung Python 3.10 hoac 3.11.
+- Nang cap pip:
+
+    python -m pip install --upgrade pip
+
+- Cai lai requirements.
+
+
+================================================
+8) Lenh copy/paste nhanh
+================================================
+
+--- Windows DEMO ---
+
+    python -m venv .venv
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+    .\.venv\Scripts\Activate.ps1
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    Copy-Item .env.example .env
+    python generate_mock_data.py
+    # Sua .env: DB_PATH=mock_data/mock_db.sqlite
+    streamlit run app.py
+
+
+--- Windows FULL ---
+
+    python -m venv .venv
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+    .\.venv\Scripts\Activate.ps1
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    Copy-Item .env.example .env
+    # Sua .env: them DEEPSEEK_API_KEY va dat DB_PATH=data/ai_tutor_v5.db
+    python init_db.py
+    # Copy PDF/DOCX vao data/
+    python embedder.py
+    streamlit run app.py
+
+
+--- macOS / Linux FULL ---
+
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    cp .env.example .env
+    # Sua .env: them DEEPSEEK_API_KEY va dat DB_PATH=data/ai_tutor_v5.db
+    python init_db.py
+    # Copy PDF/DOCX vao data/
+    python embedder.py
+    streamlit run app.py
+
+
+================================================
+9) Ghi chu cho bao cao/demo
+================================================
+
+- Khi chup anh demo, nen che API key trong file .env.
+- Nen chuan bi san:
+    1) Anh giao dien trang chinh.
+    2) Anh Chat Tutor.
+    3) Anh Exercise.
+    4) Anh Dashboard.
+    5) Anh Admin Panel sinh cau hoi.
+    6) Anh terminal chay compileall/pip check/rag_tester.
+- Neu demo truc tiep, nen chay san:
+
+    python init_db.py
+    python embedder.py
+    streamlit run app.py
+
+# ================================================================
+# END
+# ================================================================

@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence, Set, Tuple
@@ -70,12 +72,25 @@ def _resolve_metadata_path(index_path: Path) -> Path:
 
 
 def _load_index(index_path: Path) -> faiss.Index:
-    """Load FAISS index from disk with clear failures."""
+    """
+    Load FAISS index from disk with a Unicode-path fallback for Windows.
+
+    Some FAISS Windows wheels cannot open paths containing accented characters
+    even when the file exists. If direct loading fails, copy the index to an
+    ASCII-only temp path and load it from there.
+    """
     if not index_path.exists():
         raise FileNotFoundError(
             f"FAISS index not found at {index_path}. Build it first with embedder.py"
         )
-    return faiss.read_index(str(index_path))
+
+    try:
+        return faiss.read_index(str(index_path))
+    except RuntimeError:
+        with tempfile.TemporaryDirectory(prefix="ai_tutor_faiss_") as temp_dir:
+            temp_index_path = Path(temp_dir) / "faiss_index.bin"
+            shutil.copyfile(index_path, temp_index_path)
+            return faiss.read_index(str(temp_index_path))
 
 
 def _load_metadata(metadata_path: Path) -> Dict:

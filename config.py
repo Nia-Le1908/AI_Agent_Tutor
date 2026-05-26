@@ -1,5 +1,5 @@
 """
-Centralized configuration for AI Tutor V5.1 (Phase 1).
+Centralized configuration for AI Tutor (Phase 1).
 
 This module intentionally exposes simple module-level constants so early-phase
 scripts can import values directly, while still validating all critical inputs.

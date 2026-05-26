@@ -1,5 +1,5 @@
 -- ================================================================
--- AI Tutor V5.1 - SQLite schema (Phase 1)
+-- AI Tutor - SQLite schema (Phase 1)
 -- ================================================================
 -- Tables requested by the specification:
 --   1) Users

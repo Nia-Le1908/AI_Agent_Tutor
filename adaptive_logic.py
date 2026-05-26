@@ -1,5 +1,5 @@
 """
-Adaptive difficulty logic for AI Tutor V5.1 (Phase 3).
+Adaptive difficulty logic for AI Tutor (Phase 3).
 
 Specification implemented:
 - get_next_difficulty(uid) -> int

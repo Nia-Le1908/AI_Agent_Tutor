@@ -61,8 +61,9 @@ def save_history(uid: int, qid: int, is_correct: bool) -> None:
             (uid, qid, 1 if is_correct else 0),
         )
         conn.commit()
-    except sqlite3.OperationalError as e:
-        logger.error("Lỗi SQLite: %s", e)
+    except sqlite3.Error:
+        logger.exception("Failed to save answer history")
+        raise
     finally:
         conn.close()
 
