@@ -1,17 +1,22 @@
 # ================================================================
-# AI Tutor - Runtime requirements
+# AI Tutor - Runtime requirements (Phase 5 - Production Ready)
 # ================================================================
-# Recommended Python: 3.10 or 3.11
+# Recommended Python: 3.10 or 3.11 or 3.12
 #
 # Install:
 #   python -m pip install --upgrade pip
 #   pip install -r requirements.txt
+#
+# For production with PostgreSQL:
+#   pip install -r requirements.txt
+#   pip install psycopg2-binary sqlalchemy
 #
 # Notes:
 # - The app currently uses DeepSeek through the OpenAI-compatible SDK.
 # - Legacy Gemini/Ollama packages are not required by the current code path.
 # - Heavy ML dependencies such as torch/transformers/scikit-learn are installed
 #   transitively by sentence-transformers, so they are not pinned here.
+# - SQLite is used by default; set DB_TYPE=postgresql for production
 
 # ---------- Core configuration and validation ----------
 python-dotenv>=1.0,<2.0
@@ -32,3 +37,23 @@ python-docx>=1.1,<2.0
 # ---------- UI and analytics ----------
 streamlit>=1.36,<2.0
 plotly>=5.20,<6.0
+
+# ---------- Database (Production Support) ----------
+# SQLAlchemy for ORM and connection pooling
+sqlalchemy>=2.0,<3.0
+# psycopg2 for PostgreSQL support (install separately if needed)
+# psycopg2-binary>=2.9,<3.0
+
+# ---------- Security & Authentication ----------
+# bcrypt for password hashing
+bcrypt>=4.0,<5.0
+# PyJWT for token-based authentication
+PyJWT>=2.8,<3.0
+
+# ---------- Logging & Monitoring ----------
+# Structured logging
+python-json-logger>=2.0,<3.0
+
+# ---------- Testing (Development) ----------
+# pytest>=7.0,<8.0
+# pytest-cov>=4.0,<5.0
