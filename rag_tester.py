@@ -1,48 +1,39 @@
 """
-RAG retrieval evaluator for AI Tutor V5.1.
+RAG retrieval evaluator for AI Tutor.
 
 What this script does:
-1) Loads the existing FAISS index and chunk metadata built by embedder.py.
-2) Automatically constructs exactly 20 deterministic test questions.
-3) Runs retrieval for each question with top_k=3.
-4) Computes and prints:
-   - Precision@3
-   - Mean Reciprocal Rank (MRR)
+1. Loads the FAISS index and chunk metadata built by embedder.py.
+2. Builds exactly 20 deterministic test questions from the indexed chunks.
+3. Runs retrieval for each question and scores it.
+4. Prints Precision@K and Mean Reciprocal Rank (MRR) plus per-question detail.
 
-Why this approach is robust:
-- The tests are generated from your real indexed chunks, so they always match
-  the current corpus and avoid stale/manual test drift.
-- Relevance is defined as chunks from the same source document as the target
-  chunk, which makes top-3 relevance checks meaningful in multi-chunk docs.
+Why this design:
+- Tests are derived from the real indexed chunks, so they always match the current
+  corpus and cannot drift the way a hand-written question list does.
+- Relevance means "chunk from the same source document as the target chunk", which
+  makes a top-k relevance check meaningful for multi-chunk documents.
+
+Metrics are pure functions (:func:`precision_at_k`, :func:`reciprocal_rank`) so
+they can be unit-tested without an index.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import logging
 import re
-import shutil
-import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Sequence, Set, Tuple
 
-import faiss
-import numpy as np
-from sentence_transformers import SentenceTransformer
+import faiss_store
+from config import EMBEDDING_MODEL_NAME
+from validation import require_positive_int
 
-# Reuse project configuration when available.
-try:
-    from config import EMBEDDING_MODEL_NAME, FAISS_INDEX_PATH
-except Exception:  # pragma: no cover
-    EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-    FAISS_INDEX_PATH = "vector_store/faiss_index.bin"
-
+logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 3
 DEFAULT_TEST_COUNT = 20
-DEFAULT_VECTOR_DIR = Path("vector_store")
-DEFAULT_METADATA_PATH = DEFAULT_VECTOR_DIR / "chunks_metadata.json"
 
 
 @dataclass(frozen=True)
@@ -51,170 +42,115 @@ class RagTestCase:
 
     query: str
     target_chunk_id: int
-    relevant_chunk_ids: Set[int]
-    source_file: str
+    relevant_chunk_ids: Set[int] = field(compare=False, hash=False)
+    source_file: str = ""
 
 
-def _resolve_index_path() -> Path:
-    """Resolve FAISS index path from config/defaults."""
-    idx = Path(FAISS_INDEX_PATH)
-    if idx.is_absolute():
-        return idx
-    return DEFAULT_VECTOR_DIR / idx.name
+# ---------------------------------------------------------------------------
+# Metrics (pure)
+# ---------------------------------------------------------------------------
+def precision_at_k(retrieved: Sequence[int], relevant: Set[int], top_k: int) -> float:
+    """Fraction of the top-k results that are relevant (0.0 when top_k is 0)."""
+    require_positive_int(top_k, "top_k")
+    if not retrieved:
+        return 0.0
+    hits = sum(1 for chunk_id in retrieved[:top_k] if chunk_id in relevant)
+    return hits / float(top_k)
 
 
-def _resolve_metadata_path(index_path: Path) -> Path:
-    """Resolve metadata path alongside index whenever possible."""
-    candidate = index_path.parent / "chunks_metadata.json"
-    if candidate.exists():
-        return candidate
-    return DEFAULT_METADATA_PATH
+def reciprocal_rank(retrieved: Sequence[int], relevant: Set[int]) -> float:
+    """1 / rank of the first relevant result, or 0.0 when nothing relevant is found."""
+    for rank, chunk_id in enumerate(retrieved, start=1):
+        if chunk_id in relevant:
+            return 1.0 / float(rank)
+    return 0.0
 
 
-def _load_index(index_path: Path) -> faiss.Index:
-    """
-    Load FAISS index from disk with a Unicode-path fallback for Windows.
-
-    Some FAISS Windows wheels cannot open paths containing accented characters
-    even when the file exists. If direct loading fails, copy the index to an
-    ASCII-only temp path and load it from there.
-    """
-    if not index_path.exists():
-        raise FileNotFoundError(
-            f"FAISS index not found at {index_path}. Build it first with embedder.py"
-        )
-
-    try:
-        return faiss.read_index(str(index_path))
-    except RuntimeError:
-        with tempfile.TemporaryDirectory(prefix="ai_tutor_faiss_") as temp_dir:
-            temp_index_path = Path(temp_dir) / "faiss_index.bin"
-            shutil.copyfile(index_path, temp_index_path)
-            return faiss.read_index(str(temp_index_path))
+def mean(values: Sequence[float]) -> float:
+    """Arithmetic mean, 0.0 for an empty sequence."""
+    return sum(values) / len(values) if values else 0.0
 
 
-def _load_metadata(metadata_path: Path) -> Dict:
-    """Load chunk metadata JSON and verify required structure."""
-    if not metadata_path.exists():
-        raise FileNotFoundError(
-            f"Metadata file not found at {metadata_path}. Build index first with embedder.py"
-        )
-
-    data = json.loads(metadata_path.read_text(encoding="utf-8"))
-    chunks = data.get("chunks")
-    if not isinstance(chunks, list):
-        raise ValueError("Invalid metadata: missing 'chunks' list")
-
-    for i, chunk in enumerate(chunks):
-        if not isinstance(chunk, dict):
-            raise ValueError(f"Invalid chunk at index {i}: expected object")
-        if "chunk_id" not in chunk or "source_file" not in chunk or "text" not in chunk:
-            raise ValueError(f"Chunk {i} missing required keys: chunk_id/source_file/text")
-
-    return data
-
-
+# ---------------------------------------------------------------------------
+# Query synthesis
+# ---------------------------------------------------------------------------
 def _normalize_words(text: str) -> List[str]:
     """
-    Convert text into normalized words for query synthesis.
+    Extract normalized words for query synthesis.
 
-    We keep only alphabetic words with length >= 4 to reduce noise.
+    Only alphabetic tokens of length >= 4 are kept, which filters connectors and
+    other noise out of the synthesized query.
     """
-    words = re.findall(r"[A-Za-z]{4,}", text.lower())
-    return words
+    return re.findall(r"[A-Za-z]{4,}", text.lower())
 
 
-def _build_query_from_chunk_text(text: str) -> str:
+
+def build_query_from_chunk_text(text: str) -> str:
     """
-    Generate a deterministic natural-language query from chunk text.
+    Build a deterministic natural-language query from chunk text.
 
-    Strategy:
-    - Take the first 12 meaningful words from the chunk.
-    - Build a question that asks for the concept explained by those terms.
+    Uses the chunk's first meaningful terms, so the same corpus always produces the
+    same test set.
     """
     words = _normalize_words(text)
-
-    # Fallback for extremely short/noisy chunks.
     if not words:
+        # Fallback for extremely short or noisy chunks.
         return "What concept is explained in this study material?"
 
-    key_terms = words[:12]
-    joined_terms = " ".join(key_terms)
-    return f"What does the document explain about: {joined_terms}?"
+    return f"What does the document explain about: {' '.join(words[:12])}?"
 
 
-def _select_test_chunk_indices(total_chunks: int, test_count: int) -> List[int]:
+def select_test_chunk_indices(total_chunks: int, test_count: int) -> List[int]:
     """
-    Deterministically spread selected chunk indices across the whole corpus.
+    Spread selected chunk indices evenly and deterministically across the corpus.
 
-    This avoids clustering all tests in one region of the index.
+    Prevents every test from clustering in one region of the index, which would
+    overstate precision on repetitive documents.
     """
+    require_positive_int(test_count, "test_count")
     if total_chunks < test_count:
         raise ValueError(
             f"Need at least {test_count} indexed chunks, found {total_chunks}. "
             "Add more documents or reduce test_count."
         )
 
-    # Evenly spaced deterministic sampling.
     step = total_chunks / test_count
-    indices: List[int] = []
-    for i in range(test_count):
-        candidate = int(i * step)
-        if candidate >= total_chunks:
-            candidate = total_chunks - 1
-        indices.append(candidate)
+    indices = {min(int(position * step), total_chunks - 1) for position in range(test_count)}
 
-    # Ensure uniqueness (rare edge cases when total_chunks ~ test_count).
-    unique = sorted(set(indices))
-    if len(unique) == test_count:
-        return unique
+    if len(indices) < test_count:
+        # Degenerate case (test_count close to total_chunks): fill linearly.
+        for candidate in range(total_chunks):
+            if len(indices) >= test_count:
+                break
+            indices.add(candidate)
 
-    # Fill missing slots linearly.
-    used = set(unique)
-    cur = 0
-    while len(unique) < test_count and cur < total_chunks:
-        if cur not in used:
-            unique.append(cur)
-            used.add(cur)
-        cur += 1
-
-    unique.sort()
-    return unique[:test_count]
+    return sorted(indices)[:test_count]
 
 
 def build_test_cases(metadata: Dict, test_count: int = DEFAULT_TEST_COUNT) -> List[RagTestCase]:
     """
-    Build exactly test_count test cases from metadata.
+    Build ``test_count`` test cases from index metadata.
 
-    Relevance definition:
-    - A retrieved chunk is relevant if it comes from the same source_file as the
-      target chunk selected for that test case.
+    Relevance rule: a retrieved chunk counts as relevant when it comes from the
+    same source file as the target chunk for that test case.
     """
     chunks = metadata["chunks"]
-    total_chunks = len(chunks)
+    selected = select_test_chunk_indices(len(chunks), test_count)
 
-    selected_indices = _select_test_chunk_indices(total_chunks=total_chunks, test_count=test_count)
-
-    # Build reverse index: source_file -> all chunk_ids from that source.
     source_to_chunk_ids: Dict[str, Set[int]] = {}
     for chunk in chunks:
-        source = str(chunk["source_file"])
-        cid = int(chunk["chunk_id"])
-        source_to_chunk_ids.setdefault(source, set()).add(cid)
+        source_to_chunk_ids.setdefault(str(chunk["source_file"]), set()).add(int(chunk["chunk_id"]))
 
     cases: List[RagTestCase] = []
-    for idx in selected_indices:
-        chunk = chunks[idx]
-        target_chunk_id = int(chunk["chunk_id"])
+    for index in selected:
+        chunk = chunks[index]
         source_file = str(chunk["source_file"])
-        text = str(chunk["text"])
-
-        query = _build_query_from_chunk_text(text)
+        target_chunk_id = int(chunk["chunk_id"])
         relevant_ids = source_to_chunk_ids.get(source_file, {target_chunk_id})
 
         cases.append(
             RagTestCase(
-                query=query,
+                query=build_query_from_chunk_text(str(chunk["text"])),
                 target_chunk_id=target_chunk_id,
                 relevant_chunk_ids=set(relevant_ids),
                 source_file=source_file,
@@ -224,100 +160,69 @@ def build_test_cases(metadata: Dict, test_count: int = DEFAULT_TEST_COUNT) -> Li
     return cases
 
 
-def _embed_query(model: SentenceTransformer, query: str) -> np.ndarray:
-    """Encode query into a normalized float32 vector for FAISS inner-product search."""
-    vec = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
-    return np.asarray(vec, dtype=np.float32)
-
-
-def _search_top_k(index: faiss.Index, query_vec: np.ndarray, top_k: int) -> List[int]:
-    """Search FAISS and return retrieved chunk indices (metadata positions)."""
-    k = min(top_k, index.ntotal)
-    if k <= 0:
-        return []
-
-    _, indices = index.search(query_vec, k)
-    return [int(i) for i in indices[0] if int(i) >= 0]
-
-
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
 def evaluate_retrieval(
     test_cases: Sequence[RagTestCase],
     metadata: Dict,
     *,
     top_k: int = DEFAULT_TOP_K,
+    index_path: Path | None = None,
 ) -> Tuple[float, float, List[Dict]]:
     """
-    Evaluate retrieval using Precision@K and MRR.
+    Evaluate retrieval quality with Precision@K and MRR.
 
     Returns:
-    - mean_precision_at_k
-    - mean_reciprocal_rank
-    - per_case_details (for debugging/reporting)
+        (mean_precision_at_k, mean_reciprocal_rank, per_case_details)
     """
-    if top_k <= 0:
-        raise ValueError("top_k must be > 0")
+    require_positive_int(top_k, "top_k")
 
     chunks = metadata["chunks"]
-    model_name = str(metadata.get("embedding_model", EMBEDDING_MODEL_NAME))
-    model = SentenceTransformer(model_name)
-
-    index_path = _resolve_index_path()
-    index = _load_index(index_path)
+    model = faiss_store.get_embedding_model(str(metadata.get("embedding_model") or EMBEDDING_MODEL_NAME))
+    index = faiss_store.read_index(index_path or faiss_store.resolve_index_path())
 
     precision_values: List[float] = []
     reciprocal_ranks: List[float] = []
     details: List[Dict] = []
 
-    for i, case in enumerate(test_cases, start=1):
-        query_vec = _embed_query(model, case.query)
-        retrieved_positions = _search_top_k(index, query_vec, top_k=top_k)
+    for position, case in enumerate(test_cases, start=1):
+        matches = faiss_store.search_with_scores(
+            index, faiss_store.embed_query(model, case.query), top_k
+        )
 
-        # Convert metadata positions -> chunk_ids for relevance checking.
-        retrieved_chunk_ids: List[int] = []
-        for pos in retrieved_positions:
-            if pos < 0 or pos >= len(chunks):
-                continue
-            retrieved_chunk_ids.append(int(chunks[pos]["chunk_id"]))
+        retrieved_chunk_ids = [int(chunks[match]["chunk_id"]) for match, _ in matches if match < len(chunks)]
 
+        precision = precision_at_k(retrieved_chunk_ids, case.relevant_chunk_ids, top_k)
+        rank = reciprocal_rank(retrieved_chunk_ids, case.relevant_chunk_ids)
         relevant_hits = [cid for cid in retrieved_chunk_ids if cid in case.relevant_chunk_ids]
 
-        precision_at_k = len(relevant_hits) / float(top_k)
-        precision_values.append(precision_at_k)
-
-        rr = 0.0
-        for rank, cid in enumerate(retrieved_chunk_ids, start=1):
-            if cid in case.relevant_chunk_ids:
-                rr = 1.0 / float(rank)
-                break
-        reciprocal_ranks.append(rr)
-
+        precision_values.append(precision)
+        reciprocal_ranks.append(rank)
         details.append(
             {
-                "test_id": i,
+                "test_id": position,
                 "query": case.query,
                 "target_chunk_id": case.target_chunk_id,
                 "source_file": case.source_file,
                 "retrieved_chunk_ids": retrieved_chunk_ids,
                 "relevant_hits": relevant_hits,
-                "precision_at_k": precision_at_k,
-                "reciprocal_rank": rr,
+                "precision_at_k": precision,
+                "reciprocal_rank": rank,
             }
         )
 
-    mean_precision = sum(precision_values) / len(precision_values) if precision_values else 0.0
-    mean_rr = sum(reciprocal_ranks) / len(reciprocal_ranks) if reciprocal_ranks else 0.0
-
-    return mean_precision, mean_rr, details
+    return mean(precision_values), mean(reciprocal_ranks), details
 
 
-def _print_report(mean_p3: float, mrr: float, details: Sequence[Dict], top_k: int) -> None:
-    """Print concise metric summary and per-test inspection lines."""
+def print_report(mean_p_at_k: float, mrr: float, details: Sequence[Dict], top_k: int) -> None:
+    """Print a concise metric summary plus one line per test case."""
     print("=" * 72)
     print("RAG Retrieval Evaluation Report")
     print("=" * 72)
     print(f"Total test questions: {len(details)}")
     print(f"Top-K evaluated: {top_k}")
-    print(f"Precision@{top_k}: {mean_p3:.4f}")
+    print(f"Precision@{top_k}: {mean_p_at_k:.4f}")
     print(f"MRR: {mrr:.4f}")
     print("-" * 72)
     print("Per-test details (target -> retrieved):")
@@ -330,8 +235,8 @@ def _print_report(mean_p3: float, mrr: float, details: Sequence[Dict], top_k: in
         )
 
 
-def main() -> None:
-    """CLI entrypoint."""
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """CLI parser, separated from main() so it can be exercised in tests."""
     parser = argparse.ArgumentParser(
         description="Evaluate RAG retrieval quality with 20 deterministic test questions."
     )
@@ -339,27 +244,34 @@ def main() -> None:
         "--test-count",
         type=int,
         default=DEFAULT_TEST_COUNT,
-        help="Number of test questions to run (default: 20).",
+        help=f"Number of test questions to run (fixed at {DEFAULT_TEST_COUNT}).",
     )
     parser.add_argument(
         "--top-k",
         type=int,
         default=DEFAULT_TOP_K,
-        help="Top-K retrieval depth for evaluation (default: 3).",
+        help=f"Top-K retrieval depth for evaluation (default: {DEFAULT_TOP_K}).",
     )
-    args = parser.parse_args()
+    return parser.parse_args(argv)
 
-    if args.test_count != 20:
-        raise ValueError("This evaluator must run 20 test questions as requested. Use --test-count 20.")
 
-    index_path = _resolve_index_path()
-    metadata_path = _resolve_metadata_path(index_path)
-    metadata = _load_metadata(metadata_path)
+def main(argv: Sequence[str] | None = None) -> None:
+    """CLI entry point."""
+    args = parse_args(argv)
+
+    if args.test_count != DEFAULT_TEST_COUNT:
+        raise ValueError(
+            f"This evaluator must run exactly {DEFAULT_TEST_COUNT} test questions. "
+            f"Use --test-count {DEFAULT_TEST_COUNT}."
+        )
+
+    index_path = faiss_store.resolve_index_path()
+    metadata = faiss_store.load_metadata(faiss_store.resolve_metadata_path(index_path))
 
     test_cases = build_test_cases(metadata, test_count=args.test_count)
     mean_p_at_k, mrr, details = evaluate_retrieval(test_cases, metadata, top_k=args.top_k)
 
-    _print_report(mean_p_at_k, mrr, details, args.top_k)
+    print_report(mean_p_at_k, mrr, details, args.top_k)
 
 
 if __name__ == "__main__":

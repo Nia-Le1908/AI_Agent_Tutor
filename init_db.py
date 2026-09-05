@@ -3,9 +3,13 @@ Database initialization utility for AI Tutor V5.1.
 
 Responsibilities:
 1. Read schema.sql.
-2. Initialize SQLite database at config.DB_PATH.
-3. Apply schema in a safe, idempotent way.
-4. Verify that required Phase 1 tables exist.
+2. Initialize the SQLite database at ``config.DB_PATH``.
+3. Apply the schema idempotently (every statement is CREATE ... IF NOT EXISTS).
+4. Verify the required tables exist.
+
+Schema bootstrap is SQLite-specific: ``schema.sql`` uses PRAGMA, AUTOINCREMENT and
+SQLite trigger syntax. When DB_TYPE=postgresql this module refuses to run rather
+than quietly creating a SQLite file that the application will never read.
 """
 
 from __future__ import annotations
@@ -14,14 +18,20 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from config import DB_PATH
+import config
+from config import PROJECT_ROOT, ensure_runtime_dirs
+
+REQUIRED_TABLES = frozenset({"users", "questions", "history", "sessions"})
+
+SCHEMA_SQL_PATH = PROJECT_ROOT / "schema.sql"
 
 
-REQUIRED_TABLES = {"users", "questions", "history", "sessions"}
+class SchemaBootstrapError(RuntimeError):
+    """Raised when the schema cannot be applied or verified."""
 
 
-def _read_schema(schema_path: Path) -> str:
-    """Load SQL schema text and validate that it is non-empty."""
+def read_schema_sql(schema_path: Path = SCHEMA_SQL_PATH) -> str:
+    """Load the SQL schema text and validate that it is non-empty."""
     if not schema_path.exists():
         raise FileNotFoundError(f"schema.sql not found: {schema_path}")
 
@@ -31,44 +41,62 @@ def _read_schema(schema_path: Path) -> str:
     return sql
 
 
-def _verify_tables(conn: sqlite3.Connection) -> None:
-    """Ensure all required tables were created successfully."""
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    )
-    existing = {row[0] for row in cursor.fetchall()}
+def verify_tables(conn: sqlite3.Connection, required: frozenset[str] = REQUIRED_TABLES) -> None:
+    """
+    Ensure every required table was created.
 
-    missing = REQUIRED_TABLES - existing
+    Raises:
+        SchemaBootstrapError: listing whichever tables are still missing.
+    """
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    missing = required - {row[0] for row in rows}
     if missing:
-        missing_list = ", ".join(sorted(missing))
-        raise RuntimeError(f"Database initialization incomplete. Missing tables: {missing_list}")
+        raise SchemaBootstrapError(
+            "Database initialization incomplete. Missing tables: " + ", ".join(sorted(missing))
+        )
 
 
 def initialize_database() -> Path:
-    """Initialize database from schema.sql and return database path."""
-    db_path = Path(DB_PATH)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    """
+    Create/upgrade the SQLite database from schema.sql.
 
-    schema_path = Path(__file__).resolve().parent / "schema.sql"
-    schema_sql = _read_schema(schema_path)
+    Returns:
+        Absolute path of the initialized database.
 
+    Raises:
+        SchemaBootstrapError: when the configured backend is not SQLite.
+        FileNotFoundError: when schema.sql is absent.
+        sqlite3.Error: when the schema cannot be applied.
+    """
+    if config.DB_TYPE != "sqlite":
+        raise SchemaBootstrapError(
+            "init_db.py only bootstraps SQLite (schema.sql uses SQLite-only DDL). "
+            "For PostgreSQL, apply an equivalent migration and skip this step."
+        )
+
+    ensure_runtime_dirs()
+    schema_sql = read_schema_sql(SCHEMA_SQL_PATH)
+
+    # Read lazily from config so a runtime override (tests, tools) is honoured
+    # instead of being shadowed by an import-time snapshot.
+    db_path = config.DB_PATH
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.executescript(schema_sql)
-        _verify_tables(conn)
+        verify_tables(conn)
         conn.commit()
     finally:
         conn.close()
 
-    return db_path.resolve()
+    return Path(db_path).resolve()
 
 
 def main() -> int:
-    """CLI entry point with explicit process exit code."""
+    """CLI entry point with an explicit process exit code."""
     try:
         db_path = initialize_database()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - report any failure as a clean CLI error
         print(f"[ERROR] Failed to initialize database: {exc}", file=sys.stderr)
         return 1
 

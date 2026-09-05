@@ -1,115 +1,89 @@
 """
-Dashboard module for AI Tutor (Phase 4).
-
-This file is intentionally independent from app.py so charts can be reused in
-other entry points (for example a dedicated analytics page later).
+Learning analytics dashboard for AI Tutor.
 
 Charts:
-1. Session summary metrics (total, accuracy, streak).
+1. Session summary metrics (total, correct, accuracy, streak).
 2. Pie chart: correct/incorrect ratio by subject.
-3. Radar chart: weak-topic accuracy by subject.
-4. Line chart: progress over time.
+3. Radar chart: accuracy by subject (strengths / weaknesses).
+4. Line chart: cumulative accuracy over time.
 5. Bar chart: average score by difficulty.
+
+This module renders; it owns no SQL and no DB connections. Every number arrives
+from :mod:`sqlite_manager`, and each chart builder is a pure function over plain
+dicts/lists, which keeps them testable without a database or a Streamlit runtime.
 """
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional
 
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import DB_PATH
-from sqlite_manager import get_user_stats, get_weak_topics
+from sqlite_manager import (
+    get_difficulty_scores,
+    get_progress_timeline,
+    get_user_stats,
+    get_weak_topics,
+)
+
+NO_DATA_LABEL = "Chưa có dữ liệu"
+
+# Chart palette (Plotly defaults, named so the same colours are reused).
+COLOR_ACCENT = "#636EFA"
+COLOR_POSITIVE = "#00CC96"
+COLOR_NEGATIVE = "#EF553B"
 
 
-def _get_connection() -> sqlite3.Connection:
-    """Create a SQLite connection with dict-like row access enabled."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
-
-
-def _fetch_subject_stats(uid: int) -> List[sqlite3.Row]:
-    """Aggregate correct/incorrect counts by subject for one user."""
-    conn = _get_connection()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def format_timestamp(raw: Any) -> str:
+    """Render a stored ISO timestamp for an axis label, tolerating odd values."""
+    text = str(raw)
     try:
-        rows = conn.execute(
-            """
-            SELECT
-                q.subject AS subject,
-                SUM(CASE WHEN h.is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
-                SUM(CASE WHEN h.is_correct = 0 THEN 1 ELSE 0 END) AS incorrect_count,
-                COUNT(*) AS total_count
-            FROM history h
-            INNER JOIN questions q ON q.id = h.qid
-            WHERE h.uid = ?
-            GROUP BY q.subject
-            ORDER BY q.subject ASC
-            """,
-            (uid,),
-        ).fetchall()
-        return rows
-    finally:
-        conn.close()
+        return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
 
 
-def _fetch_timeline(uid: int) -> List[sqlite3.Row]:
-    """Fetch attempts ordered by timestamp for progress timeline chart."""
-    conn = _get_connection()
-    try:
-        rows = conn.execute(
-            """
-            SELECT
-                h.timestamp AS ts,
-                h.is_correct AS is_correct
-            FROM history h
-            WHERE h.uid = ?
-            ORDER BY h.timestamp ASC, h.rowid ASC
-            """,
-            (uid,),
-        ).fetchall()
-        return rows
-    finally:
-        conn.close()
+def _empty_figure(title: str, message: str = NO_DATA_LABEL) -> go.Figure:
+    """Placeholder figure used whenever a chart has no data to show."""
+    figure = go.Figure()
+    figure.update_layout(
+        title=title,
+        annotations=[
+            {
+                "text": message,
+                "xref": "paper",
+                "yref": "paper",
+                "x": 0.5,
+                "y": 0.5,
+                "showarrow": False,
+                "font": {"size": 16},
+            }
+        ],
+    )
+    return figure
 
 
-def _fetch_difficulty_scores(uid: int) -> List[sqlite3.Row]:
-    """Fetch correctness grouped by difficulty for average-score bar chart."""
-    conn = _get_connection()
-    try:
-        rows = conn.execute(
-            """
-            SELECT
-                q.difficulty AS difficulty,
-                AVG(CASE WHEN h.is_correct = 1 THEN 1.0 ELSE 0.0 END) AS avg_score,
-                COUNT(*) AS total_attempts
-            FROM history h
-            INNER JOIN questions q ON q.id = h.qid
-            WHERE h.uid = ?
-            GROUP BY q.difficulty
-            ORDER BY q.difficulty ASC
-            """,
-            (uid,),
-        ).fetchall()
-        return rows
-    finally:
-        conn.close()
+# ---------------------------------------------------------------------------
+# Chart builders (pure)
+# ---------------------------------------------------------------------------
+def build_subject_pie(subject_stats: Dict[str, Dict[str, float]]) -> go.Figure:
+    """
+    Donut chart of correct vs incorrect attempts per subject.
 
-
-def _build_subject_pie(subject_rows: List[sqlite3.Row]) -> go.Figure:
-    """Create a pie chart representing correct/incorrect ratio per subject."""
+    Args:
+        subject_stats: mapping of subject -> {"correct": float, "incorrect": float}.
+    """
     labels: List[str] = []
-    values: List[int] = []
+    values: List[float] = []
 
-    for row in subject_rows:
-        subject = str(row["subject"])
-        correct = int(row["correct_count"] or 0)
-        incorrect = int(row["incorrect_count"] or 0)
-
+    for subject, stats in subject_stats.items():
+        correct = int(stats.get("correct") or 0)
+        incorrect = int(stats.get("incorrect") or 0)
         if correct > 0:
             labels.append(f"{subject} - Đúng")
             values.append(correct)
@@ -118,10 +92,9 @@ def _build_subject_pie(subject_rows: List[sqlite3.Row]) -> go.Figure:
             values.append(incorrect)
 
     if not values:
-        labels = ["Chưa có dữ liệu"]
-        values = [1]
+        labels, values = [NO_DATA_LABEL], [1]
 
-    fig = go.Figure(
+    figure = go.Figure(
         data=[
             go.Pie(
                 labels=labels,
@@ -132,147 +105,135 @@ def _build_subject_pie(subject_rows: List[sqlite3.Row]) -> go.Figure:
             )
         ]
     )
-    fig.update_layout(title="Tỷ lệ Đúng/Sai theo môn")
-    return fig
+    figure.update_layout(title="Tỷ lệ Đúng/Sai theo môn")
+    return figure
 
 
-def _build_weak_topic_radar(uid: int) -> go.Figure:
-    """Create a radar chart showing accuracy per subject for weak-topic visualization."""
-    weak_data = get_weak_topics(uid)
+def build_weak_topic_radar(subject_stats: Dict[str, Dict[str, float]]) -> go.Figure:
+    """Radar chart of accuracy per subject; the polygon is closed on itself."""
+    subjects = list(subject_stats)
+    if not subjects:
+        return _empty_figure("Điểm mạnh / Điểm yếu theo môn")
 
-    if not weak_data:
-        fig = go.Figure()
-        fig.update_layout(title="Điểm mạnh / Điểm yếu theo môn", annotations=[
-            {"text": "Chưa có dữ liệu", "xref": "paper", "yref": "paper",
-             "x": 0.5, "y": 0.5, "showarrow": False, "font": {"size": 16}}
-        ])
-        return fig
+    accuracies = [float(subject_stats[s].get("accuracy", 0.0)) * 100 for s in subjects]
 
-    subjects = list(weak_data.keys())
-    accuracies = [weak_data[s]["accuracy"] * 100 for s in subjects]
-
-    # Close the radar polygon
-    subjects_closed = subjects + [subjects[0]]
-    accuracies_closed = accuracies + [accuracies[0]]
-
-    fig = go.Figure(
+    figure = go.Figure(
         data=[
             go.Scatterpolar(
-                r=accuracies_closed,
-                theta=subjects_closed,
+                r=accuracies + [accuracies[0]],
+                theta=subjects + [subjects[0]],
                 fill="toself",
                 name="Độ chính xác (%)",
-                line={"color": "#636EFA", "width": 2},
+                line={"color": COLOR_ACCENT, "width": 2},
                 fillcolor="rgba(99, 110, 250, 0.25)",
             )
         ]
     )
-    fig.update_layout(
+    figure.update_layout(
         title="Điểm mạnh / Điểm yếu theo môn",
         polar={"radialaxis": {"visible": True, "range": [0, 100], "ticksuffix": "%"}},
         showlegend=False,
     )
-    return fig
+    return figure
 
 
-def _build_progress_line(timeline_rows: List[sqlite3.Row]) -> go.Figure:
+def build_progress_line(timeline: List[Dict[str, Any]]) -> go.Figure:
     """
-    Create progress line chart from cumulative accuracy over attempts.
+    Cumulative-accuracy line chart over attempts.
 
-    Why cumulative accuracy:
-    - Smooths noisy single-attempt outcomes.
-    - Better reflects longitudinal progress.
+    Cumulative rather than per-attempt accuracy: a single answer is a noisy signal,
+    while the running curve shows the longitudinal trend the student cares about.
     """
+    if not timeline:
+        return _empty_figure("Tiến trình học tập")
+
     x_vals: List[str] = []
     y_vals: List[float] = []
-
     total = 0
     correct = 0
 
-    for row in timeline_rows:
+    for row in timeline:
         total += 1
-        if int(row["is_correct"]) == 1:
-            correct += 1
-
-        ts_raw = str(row["ts"])
-        try:
-            ts_display = datetime.fromisoformat(ts_raw).strftime("%Y-%m-%d %H:%M")
-        except ValueError:
-            ts_display = ts_raw
-
-        x_vals.append(ts_display)
+        correct += 1 if int(row.get("is_correct") or 0) == 1 else 0
+        x_vals.append(format_timestamp(row.get("ts")))
         y_vals.append((correct / total) * 100.0)
 
-    if not x_vals:
-        x_vals = ["Chưa có dữ liệu"]
-        y_vals = [0.0]
-
-    fig = go.Figure(
+    figure = go.Figure(
         data=[
             go.Scatter(
                 x=x_vals,
                 y=y_vals,
                 mode="lines+markers",
                 name="Độ chính xác tích lũy",
-                line={"width": 3, "color": "#00CC96"},
+                line={"width": 3, "color": COLOR_POSITIVE},
             )
         ]
     )
-    fig.update_layout(
+    figure.update_layout(
         title="Tiến trình học tập",
         xaxis_title="Thời gian",
         yaxis_title="Độ chính xác (%)",
         yaxis={"range": [0, 100]},
     )
-    return fig
+    return figure
 
 
-def _build_difficulty_bar(diff_rows: List[sqlite3.Row]) -> go.Figure:
-    """Create bar chart of average correctness by difficulty level."""
+def build_difficulty_bar(difficulty_rows: List[Dict[str, Any]]) -> go.Figure:
+    """Bar chart of average score per difficulty level, with attempt counts."""
+    if not difficulty_rows:
+        return _empty_figure("Điểm trung bình theo độ khó")
+
     x_vals: List[str] = []
     y_vals: List[float] = []
     text_vals: List[str] = []
 
-    for row in diff_rows:
-        difficulty = int(row["difficulty"])
-        avg_score = float(row["avg_score"] or 0.0) * 100.0
-        total_attempts = int(row["total_attempts"] or 0)
+    for row in difficulty_rows:
+        average = float(row.get("avg_score") or 0.0) * 100.0
+        attempts = int(row.get("total_attempts") or 0)
+        x_vals.append(f"Độ khó {int(row['difficulty'])}")
+        y_vals.append(average)
+        text_vals.append(f"{average:.1f}% ({attempts} câu)")
 
-        x_vals.append(f"Độ khó {difficulty}")
-        y_vals.append(avg_score)
-        text_vals.append(f"{avg_score:.1f}% ({total_attempts} câu)")
-
-    if not x_vals:
-        x_vals = ["Chưa có dữ liệu"]
-        y_vals = [0.0]
-        text_vals = ["0.0%"]
-
-    fig = go.Figure(
+    figure = go.Figure(
         data=[
             go.Bar(
                 x=x_vals,
                 y=y_vals,
                 text=text_vals,
                 textposition="outside",
-                marker_color="#EF553B",
+                marker_color=COLOR_NEGATIVE,
             )
         ]
     )
-    fig.update_layout(
+    figure.update_layout(
         title="Điểm trung bình theo độ khó",
         xaxis_title="Độ khó",
         yaxis_title="Điểm trung bình (%)",
         yaxis={"range": [0, 100]},
     )
-    return fig
+    return figure
 
 
-def render_dashboard(uid: int) -> None:
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+def render_summary_metrics(stats: Dict[str, Any]) -> None:
+    """Render the four headline numbers above the charts."""
+    columns = st.columns(4)
+    columns[0].metric("📝 Tổng câu đã làm", stats.get("total_attempted", 0))
+    columns[1].metric("✅ Số câu đúng", stats.get("total_correct", 0))
+    columns[2].metric("🎯 Độ chính xác", f"{stats.get('accuracy', 0.0):.1f}%")
+    columns[3].metric("🔥 Chuỗi đúng hiện tại", f"{stats.get('current_streak', 0)} câu")
+
+
+def render_dashboard(uid: Optional[int]) -> None:
     """
-    Render the full analytics dashboard for a user.
+    Render the full analytics dashboard for one user.
 
     Args:
-        uid: user id in the users table.
+        uid: user id in the users table. Invalid ids show a hint instead of raising,
+            because this runs inside a Streamlit rerun where an exception would kill
+            the whole page.
     """
     if not isinstance(uid, int) or uid <= 0:
         st.warning("Vui lòng chọn người dùng hợp lệ trước khi mở thống kê.")
@@ -280,33 +241,19 @@ def render_dashboard(uid: int) -> None:
 
     st.subheader("📊 Phân tích học tập")
 
-    # --- Session summary metrics ---
-    stats = get_user_stats(uid)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("📝 Tổng câu đã làm", stats["total_attempted"])
-    m2.metric("✅ Số câu đúng", stats["total_correct"])
-    m3.metric("🎯 Độ chính xác", f"{stats['accuracy']:.1f}%")
-    m4.metric("🔥 Chuỗi đúng hiện tại", f"{stats['current_streak']} câu")
-
+    render_summary_metrics(get_user_stats(uid))
     st.markdown("---")
 
-    # --- Charts ---
-    subject_rows = _fetch_subject_stats(uid)
-    timeline_rows = _fetch_timeline(uid)
-    diff_rows = _fetch_difficulty_scores(uid)
+    # One query feeds both the pie and the radar chart.
+    subject_stats = get_weak_topics(uid)
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.plotly_chart(build_subject_pie(subject_stats), width="stretch")
+    with col_right:
+        st.plotly_chart(build_weak_topic_radar(subject_stats), width="stretch")
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.plotly_chart(_build_subject_pie(subject_rows), width="stretch")
-
-    with col2:
-        st.plotly_chart(_build_weak_topic_radar(uid), width="stretch")
-
-    col3, col4 = st.columns(2)
-
-    with col3:
-        st.plotly_chart(_build_progress_line(timeline_rows), width="stretch")
-
-    with col4:
-        st.plotly_chart(_build_difficulty_bar(diff_rows), width="stretch")
+    col_bottom_left, col_bottom_right = st.columns(2)
+    with col_bottom_left:
+        st.plotly_chart(build_progress_line(get_progress_timeline(uid)), width="stretch")
+    with col_bottom_right:
+        st.plotly_chart(build_difficulty_bar(get_difficulty_scores(uid)), width="stretch")

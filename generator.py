@@ -1,51 +1,41 @@
 """
 Question generator for AI Tutor V5.1.
 
-Provider: DeepSeek API (cố định), tương thích OpenAI SDK.
-Yêu cầu: DEEPSEEK_API_KEY trong file .env.
+Provider: the OpenAI-compatible LLM configured in :mod:`config` (DeepSeek by
+default); the request itself (and its retry policy) lives in :mod:`llm_client`.
 
 Required interface:
 - generate(topic, difficulty) -> dict
 - generate_batch(topic, difficulty, count) -> list[dict]
 
-Key guarantees:
-1. Enforces strict JSON-only output through prompt + parser hardening.
-2. Validates final payload against schema.json before returning.
-3. Falls back to individual calls if batch mode fails.
+Guarantees:
+1. Strict JSON-only output enforced by the prompt plus defensive parsing.
+2. Every returned payload is validated against schema.json.
+3. Batch mode falls back to single questions when the model ignores the array format.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import random
-import re
-import time
-from pathlib import Path
+import logging
 from typing import Any, Dict, List
 
-from jsonschema import Draft202012Validator
+import json_parser
+import llm_client
+import schemas
+from config import DEFAULT_MODEL, MAX_BATCH_SIZE
+from validation import require_int_in_range, require_level, require_non_empty_str
+
+logger = logging.getLogger(__name__)
+
+# Re-exported so `from generator import DEFAULT_MODEL` keeps working.
+__all__ = ["DEFAULT_MODEL", "generate", "generate_batch", "build_prompt", "build_batch_prompt"]
 
 
-# Default model read from env; falls back to DeepSeek's flagship chat model.
-DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-SCHEMA_PATH = Path(__file__).resolve().parent / "schema.json"
-
-
-def _load_schema() -> Dict[str, Any]:
-    """Load and sanity-check JSON schema used for strict validation."""
-    if not SCHEMA_PATH.exists():
-        raise FileNotFoundError(f"schema.json not found: {SCHEMA_PATH}")
-
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    Draft202012Validator.check_schema(schema)
-    return schema
-
-
-def _build_prompt(topic: str, difficulty: int) -> str:
-    """
-    Build a robust generation prompt with few-shot JSON examples in Vietnamese.
-    """
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+def build_prompt(topic: str, difficulty: int) -> str:
+    """Build the single-question generation prompt (Vietnamese, JSON-only)."""
     return f"""
 Bạn là một chuyên gia giáo dục tạo bài tập trắc nghiệm.
 Hãy tạo ra chính xác MỘT câu hỏi trắc nghiệm bằng TIẾNG VIỆT.
@@ -79,14 +69,12 @@ Trả về CHỈ một JSON object hợp lệ, KHÔNG markdown, KHÔNG giải th
 """.strip()
 
 
-def _build_batch_prompt(topic: str, difficulty: int, count: int) -> str:
+def build_batch_prompt(topic: str, difficulty: int, count: int) -> str:
     """
-    Build a prompt that asks the model to generate multiple questions at once.
+    Build a prompt asking for several questions in one response.
 
-    This is significantly more reliable than calling the model N times because:
-    - Single network round-trip instead of N
-    - Model has full context to avoid duplicate questions
-    - Less chance of cumulative timeout/failure
+    Preferable to N separate calls: one network round trip, and the model can see
+    its own earlier questions so it avoids duplicates.
     """
     return f"""
 Bạn là một chuyên gia giáo dục tạo bài tập trắc nghiệm.
@@ -124,188 +112,49 @@ Trả về CHỈ một JSON array hợp lệ, KHÔNG markdown, KHÔNG giải th�
 """.strip()
 
 
-def _strip_markdown_fences(text: str) -> str:
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
+def _request_json(prompt: str, model_name: str) -> str:
+    """Call the LLM asking for a JSON response, returning the raw text."""
+    return llm_client.chat(prompt, model=model_name, json_mode=True)
+
+
+def _normalize_answer_key(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Remove markdown code fences if model ignored instructions.
+    Uppercase the answer letter in-place when the model returns "a"/" d".
 
-    This parser is defensive: even with strict prompting, LLMs occasionally return
-    output wrapped in ```json ... ``` blocks.
+    schema.json only accepts A-D, so repairing obvious casing noise before
+    validation saves a wasted round trip.
     """
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    return cleaned.strip()
-
-
-def _extract_first_json_object(text: str) -> str:
-    """
-    Extract the first balanced JSON object from text.
-
-    This allows recovery when extra text appears before/after a JSON object.
-    We track braces while respecting string literals and escapes.
-    """
-    start = text.find("{")
-    if start == -1:
-        raise ValueError("No JSON object found in model output")
-
-    depth = 0
-    in_string = False
-    escaped = False
-
-    for i in range(start, len(text)):
-        ch = text[i]
-
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-
-    raise ValueError("Unbalanced JSON object in model output")
-
-
-def _extract_all_json_objects(text: str) -> List[Dict[str, Any]]:
-    """
-    Extract all balanced JSON objects from text.
-
-    Handles both JSON array format and multiple separate objects.
-    """
-    cleaned = _strip_markdown_fences(text)
-
-    # Try parsing as a JSON array first (most reliable path)
-    try:
-        bracket_start = cleaned.find("[")
-        if bracket_start != -1:
-            bracket_depth = 0
-            in_str = False
-            esc = False
-            for i in range(bracket_start, len(cleaned)):
-                ch = cleaned[i]
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif ch == "\\":
-                        esc = True
-                    elif ch == '"':
-                        in_str = False
-                    continue
-                if ch == '"':
-                    in_str = True
-                elif ch == "[":
-                    bracket_depth += 1
-                elif ch == "]":
-                    bracket_depth -= 1
-                    if bracket_depth == 0:
-                        array_str = cleaned[bracket_start : i + 1]
-                        parsed = json.loads(array_str)
-                        if isinstance(parsed, list):
-                            return [item for item in parsed if isinstance(item, dict)]
-                        break
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Fallback: extract individual JSON objects one by one using positional scanning
-    objects: List[Dict[str, Any]] = []
-    pos = 0
-    while pos < len(cleaned):
-        next_brace = cleaned.find("{", pos)
-        if next_brace == -1:
-            break
-        try:
-            json_str = _extract_first_json_object(cleaned[next_brace:])
-            obj = json.loads(json_str)
-            if isinstance(obj, dict):
-                objects.append(obj)
-            pos = next_brace + len(json_str)
-        except (ValueError, json.JSONDecodeError):
-            pos = next_brace + 1
-
-    return objects
-
-
-def _safe_parse_json(raw_text: str) -> Dict[str, Any]:
-    """Parse model output into dict after cleanup and object extraction."""
-    cleaned = _strip_markdown_fences(raw_text)
-    json_fragment = _extract_first_json_object(cleaned)
-
-    try:
-        payload = json.loads(json_fragment)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Model output is not valid JSON: {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise ValueError("Generated payload must be a JSON object")
-
+    answer = payload.get("answer")
+    if isinstance(answer, str):
+        payload["answer"] = answer.strip().upper()
     return payload
-
-
-def _validate_payload(payload: Dict[str, Any], schema: Dict[str, Any]) -> None:
-    """Strictly validate payload against schema.json and raise clear errors."""
-    validator = Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(payload), key=lambda err: list(err.path))
-    if errors:
-        details = "; ".join(error.message for error in errors)
-        raise ValueError(f"Generated payload failed schema validation: {details}")
-
-
-def _call_llm(prompt: str, model_name: str, *, json_mode: bool = False) -> str:
-    """
-    Gọi DeepSeek API và trả về nội dung text.
-
-    Args:
-        prompt   : Prompt gửi đến model.
-        model_name: Tên model (mặc định: deepseek-chat).
-        json_mode : Nếu True, ép model trả về JSON object.
-    """
-    from openai import OpenAI
-    from config import DEEPSEEK_BASE_URL, require_deepseek_api_key
-
-    client = OpenAI(
-        api_key=require_deepseek_api_key(),
-        base_url=DEEPSEEK_BASE_URL,
-    )
-    kwargs: dict = {
-        "model": model_name,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-    }
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-
-    response = client.chat.completions.create(**kwargs)
-    return (response.choices[0].message.content or "").strip()
 
 
 def generate(topic: str, difficulty: int, model_name: str = DEFAULT_MODEL) -> Dict[str, Any]:
     """
-    Hàm chính tạo một câu hỏi trắc nghiệm qua LLM provider đang cấu hình.
+    Generate one multiple-choice question as a schema-validated dict.
+
+    Args:
+        topic: Required subject of the question.
+        difficulty: Integer in [1, 5].
+        model_name: Provider model identifier.
+
+    Returns:
+        The validated question payload (schema.json shape).
+
+    Raises:
+        ValueError: invalid topic/difficulty, unparsable or invalid model output.
+        llm_client.LLMError: provider unavailable after retries.
     """
-    if not isinstance(topic, str) or not topic.strip():
-        raise ValueError("topic must be a non-empty string")
-    if not isinstance(difficulty, int) or difficulty < 1 or difficulty > 5:
-        raise ValueError("difficulty must be an integer in range [1, 5]")
+    topic = require_non_empty_str(topic, "topic")
+    difficulty = require_level(difficulty, "difficulty")
 
-    schema = _load_schema()
-    prompt = _build_prompt(topic=topic.strip(), difficulty=difficulty)
-
-    raw_text = _call_llm(prompt, model_name, json_mode=True)
-
-    payload = _safe_parse_json(raw_text)
-    _validate_payload(payload, schema)
-
+    raw_text = _request_json(build_prompt(topic, difficulty), model_name)
+    payload = _normalize_answer_key(json_parser.safe_parse_json(raw_text))
+    schemas.validate_question_payload(payload)
     return payload
 
 
@@ -316,56 +165,61 @@ def generate_batch(
     model_name: str = DEFAULT_MODEL,
 ) -> List[Dict[str, Any]]:
     """
-    Generate multiple quiz questions via the configured LLM provider.
-
-    Falls back to calling generate() individually if the model returns
-    a single object instead of a JSON array.
+    Generate several questions in one call, falling back to single generations.
 
     Returns:
-        List of validated question dicts. May return fewer than `count` if
-        some questions fail validation (partial success).
+        Validated question dicts. May contain fewer than ``count`` items: one
+        malformed question must not discard its well-formed siblings.
+
+    Raises:
+        ValueError: invalid arguments, or nothing valid was produced at all.
+        llm_client.LLMError: provider unavailable after retries.
     """
-    if not isinstance(topic, str) or not topic.strip():
-        raise ValueError("topic must be a non-empty string")
-    if not isinstance(difficulty, int) or difficulty < 1 or difficulty > 5:
-        raise ValueError("difficulty must be an integer in range [1, 5]")
-    if not isinstance(count, int) or count < 1 or count > 10:
-        raise ValueError("count must be an integer in range [1, 10]")
+    topic = require_non_empty_str(topic, "topic")
+    difficulty = require_level(difficulty, "difficulty")
+    count = _require_batch_count(count)
 
-    schema = _load_schema()
-    prompt = _build_batch_prompt(topic=topic.strip(), difficulty=difficulty, count=count)
+    raw_text = _request_json(build_batch_prompt(topic, difficulty, count), model_name)
+    candidates = json_parser.safe_parse_json_list(raw_text)
+    valid_questions = schemas.validate_questions(_normalize_answer_key(q) for q in candidates)
 
-    raw_text = _call_llm(prompt, model_name, json_mode=True)
-    objects = _extract_all_json_objects(raw_text)
-
-    # Validate each question individually; keep valid ones
-    valid_questions: List[Dict[str, Any]] = []
-    for obj in objects:
-        try:
-            _validate_payload(obj, schema)
-            valid_questions.append(obj)
-        except ValueError:
-            continue  # Skip invalid questions silently
-
-    # If batch call yielded results, return them
     if valid_questions:
         return valid_questions
 
-    # Fallback: model returned a single object or failed array format.
-    # Call generate() individually for each question requested.
+    logger.warning(
+        "Batch generation returned no valid questions (%d candidates); falling back to %d single calls",
+        len(candidates),
+        count,
+    )
+    return _generate_individually(topic, difficulty, count, model_name)
+
+
+def _require_batch_count(count: int) -> int:
+    """Clamp-and-check the batch size against the configured provider ceiling."""
+    return require_int_in_range(count, "count", 1, MAX_BATCH_SIZE)
+
+
+def _generate_individually(
+    topic: str,
+    difficulty: int,
+    count: int,
+    model_name: str,
+) -> List[Dict[str, Any]]:
+    """Fallback path: ask for questions one at a time and keep the valid ones."""
+    valid_questions: List[Dict[str, Any]] = []
     errors: List[str] = []
-    for i in range(count):
+
+    for _ in range(count):
         try:
-            q = generate(topic=topic.strip(), difficulty=difficulty, model_name=model_name)
-            valid_questions.append(q)
-        except Exception as exc:
+            valid_questions.append(generate(topic=topic, difficulty=difficulty, model_name=model_name))
+        except Exception as exc:  # noqa: BLE001 - partial success is intentional
             errors.append(str(exc))
 
     if not valid_questions:
-        err_summary = "; ".join(errors[:3]) if errors else "No questions generated"
+        summary = "; ".join(errors[:3]) if errors else "No questions generated"
         raise ValueError(
-            f"generate_batch failed: batch call returned no valid objects and "
-            f"individual fallback also failed. Last errors: {err_summary}"
+            "generate_batch failed: batch call returned no valid objects and "
+            f"individual fallback also failed. Last errors: {summary}"
         )
 
     return valid_questions

@@ -1,81 +1,69 @@
 """
-Database configuration supporting both SQLite (development) and PostgreSQL (production).
+Database backend selection for AI Tutor.
 
-This module provides database connection management with support for:
-- SQLite for local development and testing
-- PostgreSQL for production deployments with multiple users
-- Connection pooling for better performance
-- Automatic migration support
+Thin, deliberately compatibility-oriented facade: it no longer parses ``.env``
+itself (that used to duplicate config.py with *different* defaults for the same
+path). Every value is read once in :mod:`config` and re-exposed here for callers
+that were written against this module.
+
+Prefer ``import db_manager`` for actual access, or ``config`` for raw settings.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Literal
 
-from dotenv import load_dotenv
-
-load_dotenv()
+import config
+from config import DB_PATH, DB_TYPE
 
 
 class DatabaseConfig:
-    """Centralized database configuration."""
-    
-    def __init__(self):
-        # Database type selector: 'sqlite' or 'postgresql'
-        self.DB_TYPE: str = os.getenv("DB_TYPE", "sqlite").strip().lower()
-        
-        # SQLite settings
-        self.SQLITE_DB_PATH: str = os.getenv(
-            "SQLITE_DB_PATH", 
-            "data/ai_tutor_v5.db"
-        )
-        
-        # PostgreSQL settings
-        self.POSTGRES_HOST: str = os.getenv("POSTGRES_HOST", "localhost")
-        self.POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
-        self.POSTGRES_DB: str = os.getenv("POSTGRES_DB", "ai_tutor")
-        self.POSTGRES_USER: str = os.getenv("POSTGRES_USER", "ai_tutor_user")
-        self.POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD", "")
-        self.POSTGRES_POOL_SIZE: int = int(os.getenv("POSTGRES_POOL_SIZE", "10"))
-        self.POSTGRES_MAX_OVERFLOW: int = int(os.getenv("POSTGRES_MAX_OVERFLOW", "20"))
-        
-        # Validate configuration based on DB_TYPE
-        if self.DB_TYPE == "postgresql":
-            self._validate_postgres_config()
-    
-    def _validate_postgres_config(self) -> None:
-        """Validate PostgreSQL configuration when selected."""
-        if not self.POSTGRES_PASSWORD:
-            raise ValueError(
-                "POSTGRES_PASSWORD is required when DB_TYPE=postgresql. "
-                "Set it in .env file."
-            )
-    
+    """Backend-agnostic database settings resolved from :mod:`config`."""
+
+    def __init__(self, db_type: str | None = None, sqlite_path: str | None = None) -> None:
+        self.DB_TYPE: str = (db_type or DB_TYPE).lower()
+        self.SQLITE_DB_PATH: str = sqlite_path or DB_PATH
+
+        # PostgreSQL settings are surfaced read-only for callers that inspect them.
+        self.POSTGRES_HOST: str = config.POSTGRES_HOST
+        self.POSTGRES_PORT: int = config.POSTGRES_PORT
+        self.POSTGRES_DB: str = config.POSTGRES_DB
+        self.POSTGRES_USER: str = config.POSTGRES_USER
+        self.POSTGRES_POOL_SIZE: int = config.POSTGRES_POOL_SIZE
+        self.POSTGRES_MAX_OVERFLOW: int = config.POSTGRES_MAX_OVERFLOW
+
+    @property
+    def postgres_password(self) -> str:
+        """Postgres password, kept private so it is not printed in reprs."""
+        return config.POSTGRES_PASSWORD
+
     def get_connection_string(self) -> str:
-        """Get database connection string for SQLAlchemy or direct connections."""
-        if self.DB_TYPE == "postgresql":
+        """Libpq-style connection string for the active backend."""
+        if self.is_postgresql():
             return (
-                f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+                f"postgresql://{self.POSTGRES_USER}:{self.postgres_password}"
                 f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
             )
-        else:
-            sqlite_path = Path(self.SQLITE_DB_PATH).resolve()
-            sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-            return f"sqlite:///{sqlite_path}"
-    
+        return f"sqlite:///{Path(self.SQLITE_DB_PATH).resolve()}"
+
     def get_driver_name(self) -> Literal["sqlite", "postgresql"]:
-        """Get the database driver name."""
-        return self.DB_TYPE if self.DB_TYPE in ("sqlite", "postgresql") else "sqlite"
+        """Return the active driver name (validated once, in config.py)."""
+        return "postgresql" if self.is_postgresql() else "sqlite"
+
+    def is_sqlite(self) -> bool:
+        return self.DB_TYPE == "sqlite"
+
+    def is_postgresql(self) -> bool:
+        return self.DB_TYPE == "postgresql"
 
 
-# Global configuration instance
+# Global configuration instance (module-level, as before)
 db_config = DatabaseConfig()
 
-# Backward compatibility constants for existing code
+# Backwards-compatible constants.
 DB_TYPE = db_config.DB_TYPE
-DB_PATH = db_config.SQLITE_DB_PATH if db_config.DB_TYPE == "sqlite" else ""
+DB_PATH = db_config.SQLITE_DB_PATH
 CONNECTION_STRING = db_config.get_connection_string()
 
 
@@ -86,9 +74,9 @@ def get_db_type() -> str:
 
 def is_postgresql() -> bool:
     """Check if PostgreSQL is configured."""
-    return db_config.DB_TYPE == "postgresql"
+    return db_config.is_postgresql()
 
 
 def is_sqlite() -> bool:
     """Check if SQLite is configured."""
-    return db_config.DB_TYPE == "sqlite"
+    return db_config.is_sqlite()

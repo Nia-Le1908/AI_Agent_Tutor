@@ -9,9 +9,9 @@ This script generates:
 2) mock_data/mock_db.sqlite
    - Base tables from schema.sql.
    - Sample users, questions, sessions, answer history.
-   - Additional mock-only tables:
-       - chat_history (sample conversation traces)
-       - weak_topics (materialized weak-topic stats for quick inspection)
+   - Sample rows in chat_history (already defined by schema.sql)
+   - One mock-only table: weak_topics (materialized weak-topic stats so a
+     stakeholder can inspect them with a plain SELECT)
 
 Why an additional weak_topics table in mock DB?
 - The production app computes weak topics dynamically via sqlite_manager.get_weak_topics.
@@ -26,25 +26,21 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List
 
-from jsonschema import Draft202012Validator
-
+import schemas
+from init_db import read_schema_sql
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 MOCK_DIR = PROJECT_ROOT / "mock_data"
-SCHEMA_JSON_PATH = PROJECT_ROOT / "schema.json"
-SCHEMA_SQL_PATH = PROJECT_ROOT / "schema.sql"
 OUTPUT_QUESTIONS_PATH = MOCK_DIR / "mock_questions.json"
 OUTPUT_DB_PATH = MOCK_DIR / "mock_db.sqlite"
+
+# The mock set is a fixed demo fixture: 10 questions, all 4 options each.
+EXPECTED_QUESTION_COUNT = 10
 
 
 def load_schema() -> Dict[str, Any]:
     """Load schema.json and ensure the schema itself is valid."""
-    if not SCHEMA_JSON_PATH.exists():
-        raise FileNotFoundError(f"schema.json not found at: {SCHEMA_JSON_PATH}")
-
-    schema = json.loads(SCHEMA_JSON_PATH.read_text(encoding="utf-8"))
-    Draft202012Validator.check_schema(schema)
-    return schema
+    return schemas.load_schema()
 
 
 def build_mock_questions() -> List[Dict[str, Any]]:
@@ -158,23 +154,30 @@ def build_mock_questions() -> List[Dict[str, Any]]:
     ]
 
 
-def validate_questions_strictly(questions: List[Dict[str, Any]], schema: Dict[str, Any]) -> None:
+def validate_questions_strictly(
+    questions: List[Dict[str, Any]],
+    schema: Dict[str, Any] | None = None,
+) -> None:
     """
-    Strictly validate every question against schema.json.
+    Validate every mock question against schema.json.
 
-    This fails fast with precise per-question diagnostics if any field violates
-    type, range, required keys, or additionalProperties constraints.
+    Fails fast with per-question diagnostics when any field violates type, range,
+    required keys, or additionalProperties constraints. ``schema`` is accepted (and
+    ignored) so existing callers keep working; validation always uses the shared
+    schema from :mod:`schemas`.
     """
-    validator = Draft202012Validator(schema)
+    del schema  # shared loader owns schema.json
 
-    if len(questions) != 10:
-        raise ValueError(f"Expected exactly 10 questions, got {len(questions)}")
+    if len(questions) != EXPECTED_QUESTION_COUNT:
+        raise ValueError(
+            f"Expected exactly {EXPECTED_QUESTION_COUNT} questions, got {len(questions)}"
+        )
 
     for index, question in enumerate(questions, start=1):
-        errors = sorted(validator.iter_errors(question), key=lambda err: list(err.path))
-        if errors:
-            joined = "; ".join(err.message for err in errors)
-            raise ValueError(f"Question #{index} failed schema validation: {joined}")
+        try:
+            schemas.validate_question_payload(question)
+        except schemas.SchemaValidationError as exc:
+            raise ValueError(f"Question #{index} failed schema validation: {exc}") from exc
 
 
 def write_mock_questions_json(questions: List[Dict[str, Any]]) -> None:
@@ -187,25 +190,8 @@ def write_mock_questions_json(questions: List[Dict[str, Any]]) -> None:
 
 
 def _load_schema_sql() -> str:
-    """Read schema.sql used to create core SQLite tables."""
-    if not SCHEMA_SQL_PATH.exists():
-        raise FileNotFoundError(f"schema.sql not found at: {SCHEMA_SQL_PATH}")
-
-    sql_text = SCHEMA_SQL_PATH.read_text(encoding="utf-8").strip()
-    if not sql_text:
-        raise ValueError("schema.sql is empty")
-    return sql_text
-
-
-def _options_list_to_json_object(options: List[str]) -> str:
-    """Convert [A, B, C, D] list into {A:..., B:..., C:..., D:...} JSON string."""
-    payload = {
-        "A": options[0],
-        "B": options[1],
-        "C": options[2],
-        "D": options[3],
-    }
-    return json.dumps(payload, ensure_ascii=False)
+    """Read schema.sql used to create core SQLite tables (shared with init_db)."""
+    return read_schema_sql(PROJECT_ROOT / "schema.sql")
 
 
 def build_mock_database(questions: List[Dict[str, Any]]) -> None:
@@ -234,18 +220,13 @@ def build_mock_database(questions: List[Dict[str, Any]]) -> None:
         # 1) Create core schema from project contract.
         conn.executescript(_load_schema_sql())
 
-        # 2) Create mock-only chat and weak-topic tables.
+        # 2) Create the mock-only weak-topic snapshot table.
+        #
+        # chat_history is NOT recreated here: schema.sql already defines it (with
+        # created_at), and an extra CREATE would have silently masked a column
+        # rename. Only weak_topics - which exists purely for demos - is added.
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS chat_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uid INTEGER NOT NULL,
-                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (uid) REFERENCES users(id) ON DELETE CASCADE
-            );
-
             CREATE TABLE IF NOT EXISTS weak_topics (
                 uid INTEGER NOT NULL,
                 subject TEXT NOT NULL,
@@ -278,7 +259,7 @@ def build_mock_database(questions: List[Dict[str, Any]]) -> None:
                     q["content"],
                     int(q["difficulty"]),
                     q["subject"],
-                    _options_list_to_json_object(q["options"]),
+                    schemas.options_to_json(q["options"]),
                     q["answer"],
                     q["explanation"],
                 )
@@ -328,7 +309,8 @@ def build_mock_database(questions: List[Dict[str, Any]]) -> None:
             history_rows,
         )
 
-        # 7) Insert sample chat history for UI/demo.
+        # 7) Insert sample chat history for UI/demo, using schema.sql's columns
+        # (uid, role, content, created_at) rather than a local guess at them.
         chat_rows = [
             (1, "user", "Can you explain the Pythagorean theorem?", "2026-04-24 14:31:00"),
             (1, "assistant", "Sure. In a right triangle, a^2 + b^2 = c^2.", "2026-04-24 14:31:10"),
@@ -340,7 +322,7 @@ def build_mock_database(questions: List[Dict[str, Any]]) -> None:
             (3, "assistant", "Queue is FIFO, stack is LIFO.", "2026-04-23 16:47:12"),
         ]
         conn.executemany(
-            "INSERT INTO chat_history (uid, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            "INSERT INTO chat_history (uid, role, content, created_at) VALUES (?, ?, ?, ?)",
             chat_rows,
         )
 

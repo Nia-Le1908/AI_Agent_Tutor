@@ -9,13 +9,14 @@ Phase 5 tập trung vào việc giải quyết **Điểm yếu #1: Kiến trúc 
 ### 1. Hỗ trợ đa cơ sở dữ liệu (SQLite + PostgreSQL)
 
 #### Files mới:
-- `config_db.py` - Cấu hình database thống nhất
-- `db_manager.py` - Database manager với connection pooling
+- `config_db.py` - Cấu hình database thống nhất (facade mỏng đọc lại `config.py`)
+- `db_manager.py` - Tầng kết nối duy nhất: SQLite + PostgreSQL connection pooling
 
 #### Tính năng:
 - **SQLite**: Mặc định cho development, đơn giản, không cần setup
 - **PostgreSQL**: Cho production, hỗ trợ nhiều người dùng đồng thời
-- **Connection pooling**: Tối ưu hiệu suất với SQLAlchemy
+- **Connection pooling**: `psycopg2.pool.ThreadedConnectionPool` bên trong `db_manager.py`
+  (project không dùng ORM/SQLAlchemy)
 - **Thread-safe connections**: An toàn trong môi trường đa luồng
 
 #### Cách sử dụng:
@@ -40,7 +41,8 @@ POSTGRES_PASSWORD=your-secure-password
 #### Bảng mới:
 1. **roles** - Quản lý vai trò (admin, user)
 2. **user_roles** - Gán vai trò cho người dùng
-3. **chat_history** - Lưu lịch sử chat persistent
+3. **chat_history** - Bảng lưu lịch sử chat (uid, role, content, created_at); UI hiện giữ
+   transcript trong `st.session_state`, còn `generate_mock_data.py` chèn dữ liệu mẫu vào bảng này
 4. **sessions** - Quản lý phiên học tập
 
 #### Cải tiến bảng existing:
@@ -115,26 +117,34 @@ POSTGRES_PASSWORD=...
 
 # Security
 JWT_SECRET_KEY=your-secret-key
+SESSION_TIMEOUT_HOURS=24
+ALLOW_LEGACY_PASSWORD_FALLBACK=true   # SHA-256 login fallback, tắt sau khi migrate
 
-# Feature flags
-ENABLE_CHAT_HISTORY=true
-ENABLE_ADAPTIVE_LEARNING=true
+# Optional limits / behaviour
+MAX_BATCH_SIZE=10                      # câu hỏi mỗi lần sinh (1-20)
+LLM_TIMEOUT_SECONDS=60
+SQLITE_TIMEOUT_SECONDS=10
 ```
+
+Biến nào cũng được `config.py` validate ngay lúc import; giá trị sai (ví dụ
+`CHUNK_SIZE=128`) sẽ raise `ConfigError` nêu đúng tên biến thay vì hỏng âm thầm ở pipeline.
 
 ### 6. Dependencies mới
 
 ```txt
-# Database
-sqlalchemy>=2.0,<3.0
+# Database (SQLite dùng driver có sẵn trong stdlib)
 psycopg2-binary>=2.9,<3.0  # Optional for PostgreSQL
 
 # Security
 bcrypt>=4.0,<5.0
 PyJWT>=2.8,<3.0
 
-# Logging
-python-json-logger>=2.0,<3.0
+# Testing
+pytest>=7.0,<9.0
 ```
+
+Toàn bộ SQL đi qua `db_manager.py` (driver trực tiếp + pool của psycopg2) nên
+project không cần SQLAlchemy; package này đã được gỡ khỏi `requirements.txt`.
 
 ## Migration Guide
 
@@ -189,7 +199,7 @@ um.assign_role(admin_id, "admin")
 
 ## Testing
 
-### Unit tests đã pass:
+### Smoke test nhanh (không cần pytest)
 ```bash
 # Test config_db
 python -c "import config_db; print('OK')"
@@ -204,12 +214,48 @@ python -c "from auth import hash_password, generate_token, verify_token; print('
 python -c "from auth import UserManager; um = UserManager(); print('OK')"
 ```
 
+### Bộ test pytest (hermetic)
+```bash
+pip install pytest
+python -m pytest
+```
+
+Toàn bộ suite chạy trong `tmp_path`: DB tạm tạo từ `schema.sql`, LLM và embedding model
+được fake, không gọi network và không đụng tới `data/ai_tutor_v5.db`.
+Các luồng UI (onboarding, làm bài, adaptive, chat, dashboard) được chạy thật qua
+`streamlit.testing.v1.AppTest`.
+
+## Phase 5.1 - Refactor: một config, một tầng DB, một đường LLM
+
+Phase 5 thêm các module mới nhưng chưa "nối" chúng vào phần còn lại, nên repo rơi vào
+trạng thái hai tầng song song. Refactor này giữ nguyên tên file/cấu trúc thư mục và sửa:
+
+- **Config duy nhất**: `config.py` đọc và validate `.env` một lần; `config_db.py` chỉ còn
+  là facade (không `load_dotenv`, không tự parse `POSTGRES_*`, không tự nối connection string).
+  `LLM_PROVIDER` / `GEMINI_API_KEY` / `OLLAMA_MODEL` đã gỡ vì code không còn dùng.
+- **Tầng DB duy nhất**: mọi SQL đi qua `db_manager.py`; không còn `_get_connection()` rải rác,
+  SQL thô trong `app.py` / `dashboard.py` / `auth.py` / `seed_db.py` được chuyển hết vào
+  `sqlite_manager.py`. `auth.py` dùng lại connection layer này thay vì tự mở SQLite.
+- **SQL đa backend**: `?` placeholder + helper `insert_returning_id` / `insert_ignore`
+  (thay `INSERT OR IGNORE` và `cursor.lastrowid` vốn hỏng trên PostgreSQL), timestamp
+  sinh phía Python thay vì `datetime('now','localtime')`/`julianday`, sort theo `id` thay `rowid`.
+- **Đường LLM duy nhất**: `llm_client.py` sở hữu retry/backoff + nhận biết rate limit;
+  `controller.py` không còn tự viết vòng lặp backoff trùng lặp.
+- **FAISS một chỗ**: `faiss_store.py` gộp việc resolve path, đọc/ghi index (fallback cho
+  đường dẫn không ASCII), metadata và cache embedding model.
+- **`generate_mock_data.py`**: sửa bug thật - bảng mock tự khai báo
+  `chat_history(... timestamp ...)` bị `CREATE TABLE IF NOT EXISTS` bỏ qua sau khi
+  `schema.sql` đã tạo bảng với cột `created_at`, khiến script crash
+  `table chat_history has no column named timestamp`; nay insert đúng `(uid, role, content, created_at)`.
+- **`init_db.py`**: đọc `config.DB_PATH` lúc gọi (không snapshot lúc import) và từ chối chạy
+  khi `DB_TYPE=postgresql` với thông báo rõ ràng, vì `schema.sql` là DDL SQLite-only.
+
 ## Next Steps (Các điểm yếu còn lại)
 
 Sau khi hoàn thành Điểm yếu #1, các điểm yếu tiếp theo cần giải quyết:
 
-2. **Testing**: Thêm unit tests, integration tests, CI/CD
-3. **Data Management**: Chat history persistence (đã có schema)
+2. ~~**Testing**: Thêm unit tests, integration tests~~ → đã có `tests/` + pytest; còn thiếu CI/CD
+3. **Data Management**: Chat history persistence (đã có schema, UI mới dùng session state)
 4. **Quality**: Input validation, error handling improvement
 5. **Adaptive Learning**: Topic-specific difficulty adjustment
 6. **UI/UX**: Document upload interface, question management dashboard
