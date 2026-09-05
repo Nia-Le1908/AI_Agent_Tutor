@@ -63,9 +63,11 @@ If signatures changed, confirm interfaces.md is updated:
 
 - [ ] init_db.py runs successfully
 - [ ] Streamlit app launches (app.py)
+- [ ] `python -m pytest` passes (requirements-ci.txt is the lean install)
 - [ ] If RAG code changed: embedder/retriever smoke-tested
-- [ ] If generation code changed: Gemini JSON parsing tested
+- [ ] If generation code changed: LLM JSON parsing tested (`json_parser.py`)
 - [ ] If adaptive logic changed: streak behavior tested (3 correct up, 2 wrong down)
+- [ ] If public signatures changed: file_md/interfaces.md updated in this PR
 
 ### Regression checks
 
