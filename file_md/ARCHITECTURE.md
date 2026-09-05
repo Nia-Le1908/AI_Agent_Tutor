@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả kiến trúc (components + luồng dữ liệu) của AI Tutor trong repo hiện tại.
 
-> Ghi chú: Một số comment/tài liệu cũ có nhắc “Gemini/Ollama”. Trong code hiện tại, các lời gọi LLM chính đang dùng **DeepSeek API** thông qua **OpenAI SDK** (xem `controller.py`, `generator.py`, `config.py`). Repo vẫn giữ biến `GEMINI_API_KEY` như một tuỳ chọn/legacy.
+> Ghi chú: Một số comment/tài liệu cũ có nhắc “Gemini/Ollama”. Trong code hiện tại, các lời gọi LLM chính đang dùng **DeepSeek API** thông qua **OpenAI SDK**, và tất cả đều đi qua một cửa duy nhất là `llm_client.py` (`controller.py` và `generator.py` chỉ gọi hàm này). Biến `GEMINI_API_KEY` / `LLM_PROVIDER` / `OLLAMA_MODEL` đã được gỡ khỏi `config.py` và `.env.example` vì không còn code nào đọc chúng.
 
 ---
 

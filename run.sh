@@ -72,7 +72,7 @@ if [[ ! -f ".env" ]]; then
   if [[ -f ".env.example" ]]; then
     cp .env.example .env
     echo "[WARN] .env was missing, created from .env.example"
-    echo "[WARN] Please edit .env and set GEMINI_API_KEY for full functionality"
+    echo "[WARN] Please edit .env and set DEEPSEEK_API_KEY for full functionality"
   else
     echo "[ERROR] .env.example not found. Cannot auto-create .env"
     exit 1

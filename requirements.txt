@@ -9,11 +9,14 @@
 #
 # For production with PostgreSQL:
 #   pip install -r requirements.txt
-#   pip install psycopg2-binary sqlalchemy
+#   pip install psycopg2-binary
 #
 # Notes:
 # - The app currently uses DeepSeek through the OpenAI-compatible SDK.
-# - Legacy Gemini/Ollama packages are not required by the current code path.
+# - Legacy Gemini/Ollama packages are not required by the current code path
+#   (config.py no longer exposes them either).
+# - All SQL runs through db_manager.py, which talks to the drivers directly, so no
+#   ORM layer (SQLAlchemy) is needed.
 # - Heavy ML dependencies such as torch/transformers/scikit-learn are installed
 #   transitively by sentence-transformers, so they are not pinned here.
 # - SQLite is used by default; set DB_TYPE=postgresql for production
@@ -39,9 +42,8 @@ streamlit>=1.36,<2.0
 plotly>=5.20,<6.0
 
 # ---------- Database (Production Support) ----------
-# SQLAlchemy for ORM and connection pooling
-sqlalchemy>=2.0,<3.0
-# psycopg2 for PostgreSQL support (install separately if needed)
+# SQLite (the default) uses the stdlib driver, so nothing extra is required.
+# PostgreSQL connections come from a psycopg2 pool inside db_manager.py.
 # psycopg2-binary>=2.9,<3.0
 
 # ---------- Security & Authentication ----------
@@ -50,10 +52,7 @@ bcrypt>=4.0,<5.0
 # PyJWT for token-based authentication
 PyJWT>=2.8,<3.0
 
-# ---------- Logging & Monitoring ----------
-# Structured logging
-python-json-logger>=2.0,<3.0
-
-# ---------- Testing (Development) ----------
-# pytest>=7.0,<8.0
+# ---------- Testing ----------
+# The suite is hermetic (no network, no model downloads): python -m pytest
+pytest>=7.0,<9.0
 # pytest-cov>=4.0,<5.0

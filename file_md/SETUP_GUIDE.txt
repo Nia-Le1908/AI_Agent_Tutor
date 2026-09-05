@@ -23,9 +23,16 @@ Thu muc goc project gom cac file/chuc nang chinh:
 - app.py                  : Giao dien Streamlit chinh.
 - dashboard.py            : Bieu do thong ke hoc tap bang Plotly.
 - controller.py           : Dieu phoi Chat RAG va sinh bai tap.
+- llm_client.py           : Noi duy nhat goi LLM (retry/backoff, phat hien rate limit).
 - generator.py            : Goi DeepSeek API de sinh cau hoi trac nghiem.
 - adaptive_logic.py       : Dieu chinh do kho theo lich su dung/sai.
-- sqlite_manager.py       : Cac ham truy van SQLite.
+- sqlite_manager.py       : Toan bo query nghiep vu (users/questions/history/thong ke).
+- db_manager.py           : Tang ket noi duy nhat (SQLite + PostgreSQL pool).
+- config.py               : Doc va validate .env mot lan, source of truth cho moi module.
+- config_db.py            : Facade tuong thich cho chon backend DB (khong doc .env lai).
+- validation.py           : Ham kiem tra dung chung (uid, level trong [1,5], ...).
+- schemas.py              : Load schema.json, validate cau hoi, chuan hoa options A-D.
+- faiss_store.py          : Duong dan FAISS, doc/ghi index, cache embedding model.
 - init_db.py              : Khoi tao database tu schema.sql.
 - schema.sql              : Cau truc bang users, questions, history, sessions.
 - schema.json             : Schema validate cau hoi AI sinh ra.
@@ -33,8 +40,10 @@ Thu muc goc project gom cac file/chuc nang chinh:
 - embedder.py             : Doc PDF/DOCX, chia chunk, tao embedding va FAISS index.
 - retriever.py            : Truy xuat top-k chunk tu FAISS index.
 - rag_tester.py           : Danh gia retrieval bang Precision@3 va MRR.
+- auth.py                 : Bcrypt + JWT + RBAC, doc/ghi users qua db_manager.
 - generate_mock_data.py   : Tao du lieu demo trong mock_data/.
 - requirements.txt        : Danh sach thu vien can cai.
+- pytest.ini / tests/      : Bo test hermetic (python -m pytest).
 - .env.example            : Mau cau hinh moi truong.
 
 Thu muc runtime/artifact:
@@ -115,17 +124,20 @@ Tao file .env tu mau:
     cp .env.example .env
 
 Mo file .env va dam bao co cac bien phu hop voi code hien tai.
-Neu .env.example con cac bien cu nhu GEMINI_API_KEY, LLM_PROVIDER, OLLAMA_MODEL
-thi co the giu lai nhung khong bat buoc cho luong DeepSeek hien tai.
+Cac bien cu (GEMINI_API_KEY, LLM_PROVIDER, OLLAMA_MODEL) KHONG con duoc doc nua;
+chung da bi loai khoi .env.example va config.py. Neu .env cu cua ban con gi nhung
+bien do thi chung bi bo qua (khong gay loi), nhung nen xoa cho sach.
 
 Cau hinh khuyen nghi cho FULL mode:
 
     DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
     DEEPSEEK_MODEL=deepseek-chat
 
+    DB_TYPE=sqlite
     DB_PATH=data/ai_tutor_v5.db
     FAISS_INDEX_PATH=vector_store/faiss_index.bin
     LOG_PATH=logs/app.log
+    LOG_LEVEL=INFO
 
     CHUNK_SIZE=256
     CHUNK_OVERLAP=50
@@ -133,8 +145,14 @@ Cau hinh khuyen nghi cho FULL mode:
     EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
     DEBUG_RAG_CONTEXT=false
 
+    # Chi can khi dung auth.py (JWT + bcrypt)
+    JWT_SECRET_KEY=
+    SESSION_TIMEOUT_HOURS=24
+
 Ghi chu:
 
+- Moi bien o tren deu duoc config.py validate luc start. Gia tri sai (vi du
+  CHUNK_SIZE=128 hoac CHUNK_OVERLAP >= CHUNK_SIZE) se raise ConfigError neu ro ten bien.
 - DEEPSEEK_API_KEY can cho Chat Tutor va Admin Panel sinh cau hoi.
 - DB_PATH chi toi file SQLite.
 - FAISS_INDEX_PATH chi toi FAISS index.

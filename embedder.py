@@ -1,75 +1,54 @@
 """
-Phase 2 - Embedding pipeline for AI Tutor V5.1.
+Embedding pipeline: documents -> chunks -> FAISS index + metadata.
 
-This module is responsible for:
-1. Reading source documents from the data directory (PDF and DOCX).
-2. Cleaning and normalizing extracted text.
-3. Splitting text into overlapping token-based chunks using the same tokenizer
-   family as the embedding model to keep chunk boundaries meaningful.
-4. Embedding chunks with sentence-transformers (all-MiniLM-L6-v2).
-5. Building and persisting a FAISS index plus chunk metadata.
+Steps:
+1. Read source documents from the data directory (PDF and DOCX).
+2. Clean and normalize the extracted text.
+3. Split text into overlapping token-based chunks using the same tokenizer family
+   as the embedding model, so chunk boundaries stay meaningful to the model.
+4. Embed chunks with sentence-transformers.
+5. Persist a FAISS index plus chunk metadata through :mod:`faiss_store`.
 
 Design goals:
-- Robust behavior with actionable errors.
+- Robust behaviour with actionable errors.
 - Deterministic output where possible.
-- Clean interfaces for controller/retriever integration.
+- Index/metadata layout owned by faiss_store, so retriever and rag_tester read
+  exactly what this module writes.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import shutil
-import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Any, List, Tuple
 
-import faiss
 import numpy as np
-from docx import Document
-from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 
-# Optional config import. If the config module is unavailable or does not expose
-# one of these names yet, we safely fall back to defaults.
-try:
-    from config import CHUNK_OVERLAP, CHUNK_SIZE, FAISS_INDEX_PATH
-except Exception:  # pragma: no cover
-    CHUNK_SIZE = 256
-    CHUNK_OVERLAP = 50
-    FAISS_INDEX_PATH = "vector_store/faiss_index.bin"
+import faiss_store
+from config import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    DATA_DIR,
+    EMBEDDING_MODEL_NAME,
+    VECTOR_DIR,
+)
+from validation import require_int_in_range
 
+# Document types the pipeline understands. Kept as a constant so the collector and
+# the extraction dispatcher cannot disagree about what is "supported".
+SUPPORTED_SUFFIXES = {".pdf", ".docx"}
 
-DEFAULT_DATA_DIR = Path("data")
-DEFAULT_VECTOR_DIR = Path("vector_store")
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-DEFAULT_METADATA_PATH = DEFAULT_VECTOR_DIR / "chunks_metadata.json"
+DEFAULT_DATA_DIR = Path(DATA_DIR)
+DEFAULT_VECTOR_DIR = Path(VECTOR_DIR)
+DEFAULT_EMBEDDING_MODEL = EMBEDDING_MODEL_NAME
+DEFAULT_METADATA_PATH = DEFAULT_VECTOR_DIR / faiss_store.METADATA_FILENAME
+
+# Chunking bounds mirrored from the spec; config.py validates the env values.
+MIN_CHUNK_SIZE = 256
+MAX_CHUNK_SIZE = 512
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_write_faiss_index(index: faiss.Index, index_path: Path) -> None:
-    """
-    Persist FAISS index with a Windows-safe fallback.
-
-    On some Windows setups, FAISS C++ file APIs fail for Unicode paths
-    (for example directories containing accented characters). We first try the
-    direct path, then fallback to writing in an ASCII temp directory and copy
-    the resulting binary to the target path via Python.
-    """
-    try:
-        faiss.write_index(index, str(index_path))
-        return
-    except RuntimeError as exc:
-        logger.warning("Direct FAISS write failed, using temp fallback: %s", exc)
-
-    temp_dir = Path(tempfile.gettempdir()) / "ai_tutor_faiss_tmp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_index_path = temp_dir / "faiss_index.bin"
-
-    faiss.write_index(index, str(temp_index_path))
-    shutil.copyfile(temp_index_path, index_path)
 
 
 @dataclass
@@ -83,26 +62,26 @@ class ChunkRecord:
 
 def normalize_whitespace(text: str) -> str:
     """
-    Normalize whitespace to improve chunk quality.
+    Collapse whitespace runs into single spaces.
 
-    Why this matters:
-    - PDF extraction often inserts irregular line breaks and spacing.
-    - Cleaner text produces better embeddings and retrieval precision.
+    PDF extraction inserts irregular line breaks and spacing, which both hurts
+    embedding quality and makes chunk sizes unpredictable.
     """
     return " ".join(text.split())
 
 
 def parse_pdf_text(file_path: Path) -> str:
     """
-    Extract raw text from a PDF file.
+    Extract normalized text from a PDF.
 
-    The function handles common PDF issues:
-    - encrypted files (attempts empty-password decrypt)
-    - pages with no extractable text
+    Handles the common PDF issues: encrypted files (empty-password decrypt is
+    attempted) and pages with no extractable text.
 
     Raises:
         ValueError: when no usable text can be extracted.
     """
+    from pypdf import PdfReader
+
     reader = PdfReader(str(file_path))
 
     if reader.is_encrypted:
@@ -111,12 +90,11 @@ def parse_pdf_text(file_path: Path) -> str:
         except Exception as exc:
             raise ValueError(f"Cannot decrypt PDF: {file_path}") from exc
 
-    page_texts: List[str] = []
-    for page in reader.pages:
-        extracted = page.extract_text() or ""
-        cleaned = normalize_whitespace(extracted)
-        if cleaned:
-            page_texts.append(cleaned)
+    page_texts = [
+        cleaned
+        for cleaned in (normalize_whitespace(page.extract_text() or "") for page in reader.pages)
+        if cleaned
+    ]
 
     full_text = "\n".join(page_texts).strip()
     if not full_text:
@@ -126,49 +104,71 @@ def parse_pdf_text(file_path: Path) -> str:
 
 def parse_docx_text(file_path: Path) -> str:
     """Extract text from a DOCX file with paragraph-level normalization."""
+    from docx import Document
+
     doc = Document(str(file_path))
-    paragraphs = [normalize_whitespace(p.text) for p in doc.paragraphs if p.text.strip()]
+    paragraphs = [normalize_whitespace(p.text) for p in doc.paragraphs if p.text and p.text.strip()]
+
     full_text = "\n".join(paragraphs).strip()
     if not full_text:
         raise ValueError(f"No extractable text found in DOCX: {file_path}")
     return full_text
 
 
+def extract_text(file_path: Path) -> str:
+    """
+    Extract text from any supported document type.
+
+    Raises:
+        ValueError: for an unsupported suffix.
+    """
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".pdf":
+        return parse_pdf_text(Path(file_path))
+    if suffix == ".docx":
+        return parse_docx_text(Path(file_path))
+    raise ValueError(f"Unsupported file type: {file_path}")
+
+
+# Historical alias kept for callers documented in interfaces.md.
+_extract_text_for_file = extract_text
+
+
 def chunk_text_by_tokens(
     text: str,
-    model: SentenceTransformer,
+    model: Any,
     chunk_size: int = CHUNK_SIZE,
     overlap: int = CHUNK_OVERLAP,
 ) -> List[str]:
     """
     Split text into token-based overlapping chunks.
 
-    Requirements enforced from spec:
-    - chunk_size must be in [256, 512]
-    - overlap defaults to 50
+    Args:
+        text: Source text.
+        model: embedding model exposing ``.tokenizer`` (duck-typed so tests can
+            pass a fake tokenizer).
+        chunk_size: Required to be in [256, 512].
+        overlap: Token overlap between consecutive chunks; must be < chunk_size.
 
-    Implementation detail:
-    - We chunk in embedding-model token space by using the model tokenizer.
-    - This keeps each chunk near the desired semantic size for embedding.
+    Returns:
+        List of chunk strings, in document order.
+
+    Raises:
+        ValueError: when the sizing arguments violate the spec.
     """
-    if chunk_size < 256 or chunk_size > 512:
-        raise ValueError(f"chunk_size must be in [256, 512], got {chunk_size}")
-    if overlap < 0:
-        raise ValueError("overlap must be >= 0")
-    if overlap >= chunk_size:
-        raise ValueError("overlap must be smaller than chunk_size")
+    chunk_size = require_int_in_range(chunk_size, "chunk_size", MIN_CHUNK_SIZE, MAX_CHUNK_SIZE)
+    overlap = require_int_in_range(overlap, "overlap", 0, chunk_size - 1)
 
     tokenizer = model.tokenizer
     token_ids = tokenizer.encode(text, add_special_tokens=False)
-
     if not token_ids:
         return []
 
     step = chunk_size - overlap
     chunks: List[str] = []
 
-    # Walk token stream with overlap. Decoding each token window yields text
-    # that remains aligned to model tokenization.
+    # Walk the token stream with a stride of (size - overlap). Decoding each window
+    # keeps chunk text aligned to model tokens rather than arbitrary characters.
     for start in range(0, len(token_ids), step):
         end = start + chunk_size
         window_ids = token_ids[start:end]
@@ -185,25 +185,52 @@ def chunk_text_by_tokens(
     return chunks
 
 
-def _collect_source_files(data_dir: Path) -> List[Path]:
-    """Collect supported source files recursively from the data folder."""
+def collect_source_files(data_dir: Path) -> List[Path]:
+    """Collect supported source files recursively, in deterministic sorted order."""
     if not data_dir.exists():
         logger.warning("Data directory does not exist: %s", data_dir)
         return []
 
-    supported_suffixes = {".pdf", ".docx"}
-    files = [p for p in data_dir.rglob("*") if p.is_file() and p.suffix.lower() in supported_suffixes]
+    files = [
+        path
+        for path in data_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+    ]
     return sorted(files)
 
 
-def _extract_text_for_file(file_path: Path) -> str:
-    """Dispatch text extraction by file type."""
-    suffix = file_path.suffix.lower()
-    if suffix == ".pdf":
-        return parse_pdf_text(file_path)
-    if suffix == ".docx":
-        return parse_docx_text(file_path)
-    raise ValueError(f"Unsupported file type: {file_path}")
+def build_chunk_records(
+    source_files: List[Path],
+    model: Any,
+    *,
+    chunk_size: int,
+    overlap: int,
+) -> List[ChunkRecord]:
+    """
+    Turn documents into numbered chunk records, skipping unreadable files.
+
+    One corrupt PDF should not abort an index rebuild, so extraction failures are
+    logged and skipped.
+    """
+    records: List[ChunkRecord] = []
+
+    for file_path in source_files:
+        try:
+            raw_text = extract_text(file_path)
+        except Exception as exc:  # noqa: BLE001 - per-file resilience is intentional
+            logger.warning("Skipping unreadable file %s due to: %s", file_path, exc)
+            continue
+
+        for chunk in chunk_text_by_tokens(raw_text, model, chunk_size=chunk_size, overlap=overlap):
+            records.append(
+                ChunkRecord(
+                    chunk_id=len(records),
+                    source_file=file_path.as_posix(),
+                    text=chunk,
+                )
+            )
+
+    return records
 
 
 def build_faiss_index(
@@ -214,99 +241,79 @@ def build_faiss_index(
     overlap: int = CHUNK_OVERLAP,
 ) -> Tuple[Path, Path, int]:
     """
-    Build and persist FAISS index + metadata.
+    Build and persist the FAISS index plus chunk metadata.
 
     Returns:
         (index_path, metadata_path, total_chunks)
+
+    Raises:
+        FileNotFoundError: when no supported documents exist under ``data_dir``.
+        ValueError: when the documents yield no usable chunks.
     """
-    data_dir = Path(data_dir)
-    vector_dir = Path(vector_dir)
-    vector_dir.mkdir(parents=True, exist_ok=True)
+    data_path = Path(data_dir)
+    vector_path = Path(vector_dir)
+    vector_path.mkdir(parents=True, exist_ok=True)
 
-    # Keep index filename aligned with project conventions.
-    index_path = Path(FAISS_INDEX_PATH)
-    if not index_path.is_absolute():
-        index_path = vector_dir / index_path.name
+    index_path = faiss_store.resolve_index_path(vector_dir=vector_path)
+    metadata_path = index_path.parent / faiss_store.METADATA_FILENAME
 
-    metadata_path = vector_dir / DEFAULT_METADATA_PATH.name
+    model = faiss_store.get_embedding_model(embedding_model_name)
 
-    # Ensure output directories exist before attempting file writes.
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
-
-    model = SentenceTransformer(embedding_model_name)
-
-    source_files = _collect_source_files(data_dir)
+    source_files = collect_source_files(data_path)
     if not source_files:
         raise FileNotFoundError(
-            f"No supported documents (.pdf/.docx) found under: {data_dir.resolve()}"
+            f"No supported documents (.pdf/.docx) found under: {data_path.resolve()}"
         )
 
-    chunk_records: List[ChunkRecord] = []
-    next_chunk_id = 0
-
-    for file_path in source_files:
-        try:
-            raw_text = _extract_text_for_file(file_path)
-        except Exception as exc:
-            logger.warning("Skipping unreadable file %s due to: %s", file_path, exc)
-            continue
-
-        chunks = chunk_text_by_tokens(
-            text=raw_text,
-            model=model,
-            chunk_size=chunk_size,
-            overlap=overlap,
-        )
-
-        for chunk in chunks:
-            chunk_records.append(
-                ChunkRecord(
-                    chunk_id=next_chunk_id,
-                    source_file=str(file_path.as_posix()),
-                    text=chunk,
-                )
-            )
-            next_chunk_id += 1
-
+    chunk_records = build_chunk_records(
+        source_files, model, chunk_size=chunk_size, overlap=overlap
+    )
     if not chunk_records:
         raise ValueError("No valid chunks were generated from input documents.")
 
-    chunk_texts = [record.text for record in chunk_records]
-
     embeddings = model.encode(
-        chunk_texts,
+        [record.text for record in chunk_records],
         convert_to_numpy=True,
         show_progress_bar=True,
         normalize_embeddings=True,
     )
+    embeddings = np.asarray(embeddings, dtype=np.float32)
 
     if embeddings.ndim != 2:
         raise ValueError(f"Unexpected embedding shape: {embeddings.shape}")
 
-    # FAISS expects float32 contiguous arrays.
-    embeddings = np.asarray(embeddings, dtype=np.float32)
+    index = _build_index(embeddings)
+    faiss_store.write_index(index, index_path)
 
-    # Use inner product because vectors are normalized -> equivalent to cosine similarity.
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dimension)
-    index.add(embeddings)
-
-    _safe_write_faiss_index(index, index_path)
-
-    metadata_payload = {
-        "embedding_model": embedding_model_name,
-        "chunk_size": chunk_size,
-        "chunk_overlap": overlap,
-        "total_chunks": len(chunk_records),
-        "chunks": [record.__dict__ for record in chunk_records],
-    }
-    metadata_path.write_text(json.dumps(metadata_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    faiss_store.write_metadata(
+        metadata_path,
+        faiss_store.build_metadata_payload(
+            [asdict(record) for record in chunk_records],
+            embedding_model=embedding_model_name,
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+        ),
+    )
 
     logger.info("Built FAISS index at %s with %d chunks", index_path, len(chunk_records))
     logger.info("Saved chunk metadata at %s", metadata_path)
 
     return index_path, metadata_path, len(chunk_records)
+
+
+def _build_index(embeddings: np.ndarray) -> Any:
+    """
+    Create a flat inner-product index over normalized vectors.
+
+    Vectors are L2-normalized before indexing, which makes inner product equal to
+    cosine similarity while staying exact (no ANN approximation to tune).
+    """
+    import faiss
+
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dimension)
+    index.add(embeddings)
+    return index
 
 
 if __name__ == "__main__":

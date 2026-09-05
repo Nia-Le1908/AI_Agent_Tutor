@@ -1,145 +1,39 @@
-```
 # Dependencies
 .venv/
 venv/
 __pycache__/
+*.py[cod]
+*.egg-info/
 
-# Environment
+# Environment (never commit real secrets)
 .env
 .env.local
-*.env.*
+.env.*.local
 
-# Logs and temp files
+# Logs and local artifacts
+logs/
 *.log
 *.tmp
-*.swp
 
-# Editors
+# Generated demo output
+mock_data/
+
+# Local databases and vector artifacts written by the pipelines.
+# NOTE: the demo database data/ai_tutor_v5.db and vector_store/chunks_metadata.json
+# are intentionally tracked; the patterns below only cover local scratch copies.
+*.sqlite
+*.sqlite-journal
+vector_store/faiss_index.bin
+
+# Editors and OS
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
 
-# Python specific
-*.pyc
-*.pyo
-*.pyd
-*.py~
-*.py.class
-*.py.backup
-*.py.swp
-*.py.swo
-*.py.tmp
-*.py.bak
-*.py.orig
-*.py.rej
-*.py.patch
-*.py.diff
-*.py.log
-*.py.err
-*.py.out
-*.py.pid
-*.py.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp
-*.py.pid.log
-*.py.pid.err
-*.py.pid.out
-*.py.pid.sock
-*.py.pid.lock
-*.py.pid.tmp......
-```
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
