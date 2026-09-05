@@ -1,0 +1,41 @@
+# ================================================================
+# AI Tutor - Lean dependency set for tests and CI
+# ================================================================
+# This is requirements.txt minus the heavyweight ML/runtime extras that the test
+# suite does not need:
+#
+#   - sentence-transformers (and the torch/transformers it pulls in) is only used
+#     when documents are actually embedded. embedder.py, retriever.py and
+#     faiss_store.py import it lazily, so every test passes without it - which is
+#     what makes CI fast and keeps model downloads out of the pipeline.
+#   - psycopg2-binary is only needed for DB_TYPE=postgresql; the suite runs
+#     against SQLite.
+#
+# Run the full suite with:  python -m pytest
+# ================================================================
+
+# Core configuration and validation
+python-dotenv>=1.0,<2.0
+jsonschema>=4.20,<5.0
+
+# LLM SDK (imported by llm_client.py; the transport is faked in tests)
+openai>=1.30,<3.0
+
+# Vector search + numeric kernels used by the retrieval tests
+faiss-cpu>=1.8,<2.0
+numpy>=1.26,<3.0
+
+# Document loaders (imported lazily by embedder.py)
+pypdf>=4.0,<5.0
+python-docx>=1.1,<2.0
+
+# UI and analytics (AppTest drives app.py, dashboard.py builds Plotly figures)
+streamlit>=1.36,<2.0
+plotly>=5.20,<6.0
+
+# Security layer used by auth.py tests
+bcrypt>=4.0,<5.0
+PyJWT>=2.8,<3.0
+
+# Test runner
+pytest>=7.0,<9.0

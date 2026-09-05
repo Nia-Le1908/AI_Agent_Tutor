@@ -254,7 +254,7 @@ trạng thái hai tầng song song. Refactor này giữ nguyên tên file/cấu 
 
 Sau khi hoàn thành Điểm yếu #1, các điểm yếu tiếp theo cần giải quyết:
 
-2. ~~**Testing**: Thêm unit tests, integration tests~~ → đã có `tests/` + pytest; còn thiếu CI/CD
+2. ~~**Testing**: Thêm unit tests, integration tests~~ → đã có `tests/` + pytest và CI (`.github/workflows/ci.yml` chạy `requirements-ci.txt` trên Python 3.10-3.12)
 3. **Data Management**: Chat history persistence (đã có schema, UI mới dùng session state)
 4. **Quality**: Input validation, error handling improvement
 5. **Adaptive Learning**: Topic-specific difficulty adjustment

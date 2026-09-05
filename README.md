@@ -194,6 +194,10 @@ pip install pytest
 python -m pytest
 ```
 
+CI installs `requirements-ci.txt` (the same set minus `sentence-transformers`/torch
+and `psycopg2`) and runs the suite on Python 3.10-3.12; see
+`.github/workflows/ci.yml`.
+
 Coverage includes the adaptive streak rules, schema/option validation, LLM output
 hardening, retry and rate-limit fallback behaviour, FAISS IO, and the Streamlit
 flows driven through `streamlit.testing.v1.AppTest`.

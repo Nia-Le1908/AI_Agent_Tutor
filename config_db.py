@@ -15,15 +15,16 @@ from pathlib import Path
 from typing import Literal
 
 import config
-from config import DB_PATH, DB_TYPE
 
 
 class DatabaseConfig:
     """Backend-agnostic database settings resolved from :mod:`config`."""
 
     def __init__(self, db_type: str | None = None, sqlite_path: str | None = None) -> None:
-        self.DB_TYPE: str = (db_type or DB_TYPE).lower()
-        self.SQLITE_DB_PATH: str = sqlite_path or DB_PATH
+        # Read through the module (not import-time copies) so a runtime override of
+        # config cannot be shadowed by a stale binding here.
+        self.DB_TYPE: str = (db_type or config.DB_TYPE).lower()
+        self.SQLITE_DB_PATH: str = sqlite_path or config.DB_PATH
 
         # PostgreSQL settings are surfaced read-only for callers that inspect them.
         self.POSTGRES_HOST: str = config.POSTGRES_HOST
